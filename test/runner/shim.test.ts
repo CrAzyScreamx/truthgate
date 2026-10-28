@@ -109,6 +109,7 @@ createInterface({ input: process.stdin }).on('line', (l) => {
   assert.ok(alive());
   await assert.rejects(c.call('hang', {}), /timed out/);
   await c.close();
-  for (let i = 0; i < 60 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
+  // taskkill /t can take 5-20 s under suite load on Windows; the kill is real, only the wait varies.
+  for (let i = 0; i < 180 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
   assert.equal(alive(), false, `grandchild ${gpid} still running`);
 });

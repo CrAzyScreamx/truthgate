@@ -146,6 +146,24 @@ const io = (answers: string) => {
   return { io: { input, output, isTTY: true }, text: () => text };
 };
 
+test('approve without a recorded baseline inherits nothing from HEAD (round 3)', async () => {
+  // An agent committed approvals and then deleted this machine's record: HEAD's approved.json must not be trusted by approve.
+  const root = await repo({ '.truthgate/specs/s1.yaml': SPEC(1) });
+  const first = io('y\n');
+  assert.equal(await runApprove(root, first.io), 0);
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'approved'], { cwd: root });
+  const { rmSync } = await import('node:fs');
+  const { recordPath } = await import('../../src/core/baseline.ts');
+  rmSync(await recordPath(root));
+  const again = io('n\n');
+  assert.equal(await runApprove(root, again.io), 0);
+  assert.match(again.text(), /No truthgate baseline is recorded on this machine/);
+  assert.match(again.text(), /NEW s1/);
+  assert.deepEqual(await approvalStates(root, await loadSpecs(root)), { s1: 'pending' });
+});
+
 test('approve refuses without a TTY', async () => {
   const root = await repo();
   const { io: x } = io('y\n');

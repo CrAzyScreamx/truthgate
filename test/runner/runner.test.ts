@@ -21,6 +21,7 @@ export const typo = (x: number) => (x > 6 ? (null as any).v : x * 2);
 export const refuses = (x: number) => { if (x > 6) { const e = new Error('no'); e.name = 'Rejected'; throw e; } return x * 2; };
 export const spin = (_x: number) => { for (;;) {} };
 export const deep = (n: number): number => (n > 7 ? deep(n) : n);
+export const ids = (n: number) => Array.from({ length: n * 100 }, (_, i) => i);
 let failed = false;
 export const dieAfterFail = (x: number) => { if (failed) process.exit(1); if (x >= 5) { failed = true; return -1; } return x * 2; };
 export const sortInPlace = (xs: number[]) => xs.sort((a, b) => a - b);
@@ -139,6 +140,13 @@ test('JS stack overflow (a RangeError) is a crash, not a rejection', async () =>
   assert.equal(v.kind, 'FALSIFIED', v.detail);
   assert.deepEqual(v.counterexample, { x: 8 });
   assert.match(v.detail, /call stack/i);
+});
+
+test('a property too expensive to evaluate is UNVERIFIED, never FALSIFIED (correct code)', async () => {
+  const v = await one(fnSpec('ids', 'all(v in out: count(out, v) == 1)'));
+  assert.equal(v.kind, 'UNVERIFIED', v.detail);
+  assert.match(v.detail, /too expensive/);
+  assert.equal(v.counterexample, undefined);
 });
 
 test('ensures ExprError (wrong-typed out) is FALSIFIED; requires ExprError is UNVERIFIED', async () => {

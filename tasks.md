@@ -63,7 +63,8 @@ Status values: Pending · In Progress · Done · Blocked (with the reason).
 | M5.3 | Fix round 1 | coders | Done |
 | M5.4 | Review round 2 | R1, R2 | Done |
 | M5.5 | Fix round 2 (`.build/FIX-final.md`): baseline laundering, int tolerance, JS stack overflow, Windows kill tree, approve shows tamper, hook EISDIR | C1, C2, C3 | Done |
-| M5.6 | Review round 3, added by the user (leftovers → KNOWN_ISSUES.md; a blocker → ask the user) | R1, R2 | Pending |
+| M5.6 | Review round 3, added by the user (leftovers → KNOWN_ISSUES.md; a blocker → ask the user) | R1, R2 | Done |
+| M5.7 | Lead fixes after review 3 (user-approved, no further review): step-cap → UNVERIFIED, 1e-12 tolerance, approve without a baseline inherits nothing, flaky killTree poll | lead | Done |
 
 ## Contract requests
 (Coders: add a line here if you need something changed in `src/contract.ts`.)

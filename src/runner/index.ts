@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import type { CallResult, Expr, FunctionCaller, Property, RunOptions, Spec, TypeSpec, Verdict } from '../contract.ts';
-import { expr, ExprError } from '../core/expr.ts';
+import { expr, ExprCostError, ExprError } from '../core/expr.ts';
 import { parseType } from '../core/typespec.ts';
 import { getAdapter } from '../lang/index.ts';
 import { runHypothesis } from './hypothesis.ts';
@@ -51,11 +51,13 @@ const show = (v: unknown) => {
   return s.length > 300 ? `${s.slice(0, 300)}...` : s;
 };
 
-/** Evaluate an ensures/invariant. Its inputs were valid, so an ExprError means the output (or state) is wrong: a failure. */
-function check(ast: Expr, env: Record<string, unknown>, name: string): { ok: boolean; err: string } {
+/** Evaluate an ensures/invariant. Its inputs were valid, so an ExprError means the output (or state) is wrong: a failure.
+ *  Exception: hitting the step cap says the property is too expensive, not that the code is wrong -> `abort` (UNVERIFIED). */
+function check(ast: Expr, env: Record<string, unknown>, name: string): { ok: boolean; err: string; abort?: string } {
   try {
     return { ok: truth(expr.evaluate(ast, env), name), err: '' };
   } catch (e) {
+    if (e instanceof ExprCostError) return { ok: true, err: '', abort: abortReason(e) };
     if (!(e instanceof ExprError)) throw e;
     return { ok: false, err: ` (expression error: ${e.message})` };
   }
@@ -116,8 +118,12 @@ async function runFunctionProp(spec: Spec, p: Property, ast: Expr, caller: Funct
       fail = { ce: input, why: `crash for ${show(input)}: ${res!.error}` };
       return false;
     }
-    const { ok, err } = check(ast, { ...input, out: res!.out }, p.name);
-    if (!ok) fail = { ce: input, why: `${p.name} failed for ${show(input)}: out = ${show(res!.out)}${err}` };
+    const { ok, err, abort: cost } = check(ast, { ...input, out: res!.out }, p.name);
+    if (cost) {
+      abort = cost;
+      return true;
+    }
+    if (!ok) fail ={ ce: input, why: `${p.name} failed for ${show(input)}: out = ${show(res!.out)}${err}` };
     return ok;
   });
   const r = await fc.check(prop, checkOpts(opts.seed, runs, opts.deadline));
@@ -151,7 +157,11 @@ async function runSequenceProp(spec: Spec, p: Property, ast: Expr, caller: Funct
             if (!abort && !fail) abort = abortReason(e);
             throw e;
           }
-          const { ok, err } = check(ast, { state, op: op.name, input, out: res.ok ? res.out : null }, p.name);
+          const { ok, err, abort: cost } = check(ast, { state, op: op.name, input, out: res.ok ? res.out : null }, p.name);
+          if (cost) {
+            if (!abort && !fail) abort = cost;
+            throw new Error(cost);
+          }
           if (!ok) failNow(`invariant ${p.name} broken (state = ${show(state)})${err}`);
         },
         toString: () => `${op.name}(${show(input)})`,

@@ -11,7 +11,7 @@ import type { Expr, ExprApi, Helper } from '../contract.ts';
 //   abs(n) · round(x, places=0) half away from zero · sorted(xs) ascending · perm(a, b): b is a
 //   rearrangement of a · unique(xs): no two elements equal · count(xs, v): elements equal to v ·
 //   range(n) / range(a, b) (at most 100000 items) · keys(o) / values(o) in sorted key order.
-// - Integers compare exactly. Other numbers are equal within 1e-9 * max(1, |a|, |b|) (==, !=,
+// - Integers compare exactly. Other numbers are equal within 1e-12 * max(1, |a|, |b|) (==, !=,
 //   ordering, and the equality inside perm/unique/count), so decimal inputs don't drift.
 // - One evaluate() may take at most 1e6 steps: quantifier iterations, perm/unique comparisons, and
 //   the size of every list built (literals, +, range, sorted, keys, values) or scanned (sum, count).
@@ -27,6 +27,9 @@ export class ExprError extends Error {
   }
 }
 
+/** The step cap was hit: the property is too expensive to evaluate, which says nothing about the code. */
+export class ExprCostError extends ExprError {}
+
 const HELPER_ARITY: Record<Helper, [number, number]> = {
   len: [1, 1], sum: [1, 1], min: [1, Infinity], max: [1, Infinity], abs: [1, 1], round: [1, 2],
   sorted: [1, 1], perm: [2, 2], unique: [1, 1], count: [2, 2], range: [1, 2], keys: [1, 1], values: [1, 1],
@@ -35,12 +38,14 @@ const KEYWORDS = new Set(['and', 'or', 'not', 'implies', 'in', 'true', 'false', 
 const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
 const RANGE_MAX = 100000;
 const STEP_MAX = 1_000_000;
-const TOL = 1e-9;
+// ponytail: one relative tolerance absorbs float drift from summing up to ~1e4 decimal terms and still
+// sees a 1-cent error on totals up to ~1e10; beyond that, compare scaled integers (cents) in the spec.
+const TOL = 1e-12;
 
 // Step budget for the current evaluate() call (evaluate is synchronous, so one counter suffices).
 let steps = 0;
 const tick = (n = 1) => {
-  if ((steps += n) > STEP_MAX) fail(`expression too expensive: more than ${STEP_MAX} steps`);
+  if ((steps += n) > STEP_MAX) throw new ExprCostError(`expression too expensive: more than ${STEP_MAX} steps`);
 };
 const numEq = (a: number, b: number) =>
   a === b || (!(Number.isInteger(a) && Number.isInteger(b)) && Math.abs(a - b) <= TOL * Math.max(1, Math.abs(a), Math.abs(b)));
@@ -503,6 +508,9 @@ export const PY_HELPERS = `import math, functools
 class ExprError(Exception):
     pass
 
+class ExprCostError(ExprError):
+    pass
+
 def _err(msg):
     raise ExprError(msg)
 
@@ -563,7 +571,7 @@ _steps = [0]
 
 def _tick(n=1):
     _steps[0] += n
-    if _steps[0] > 1000000: _err("expression too expensive: more than 1000000 steps")
+    if _steps[0] > 1000000: raise ExprCostError("expression too expensive: more than 1000000 steps")
 
 def _run(f):
     _steps[0] = 0
@@ -575,7 +583,7 @@ def _isint(v):
 def _numeq(a, b):
     if a == b: return True
     if _isint(a) and _isint(b): return False
-    return abs(a - b) <= 1e-9 * max(1, abs(a), abs(b))
+    return abs(a - b) <= 1e-12 * max(1, abs(a), abs(b))
 
 def _sized(xs):
     _tick(len(xs))

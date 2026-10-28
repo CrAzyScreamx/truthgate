@@ -17,7 +17,7 @@
 ## Language adapters
 - **Java:** compiles the target with `javac -sourcepath`. Projects that need external jars must set `spec.shim.command`.
 - **Go, Rust, C# sequence specs:** private and unexported fields are invisible, so expose a `State()`/`state()` method.
-- **JSON numbers:** decimals cross the shim as floats rounded to `places`. Equality uses a 1e-9 relative tolerance.
+- **JSON numbers:** decimals cross the shim as floats rounded to `places`. Integers compare exactly. Other numbers use a 1e-12 relative tolerance: it absorbs float drift from summing up to ~10,000 terms and still sees a 1-cent error on totals up to ~10 billion. Beyond that, compare scaled integers (cents) in the spec.
 
 ## Tooling
 - **Local tarballs:** `npx ./truthgate-0.1.0.tgz` silently does nothing in Git Bash. Use `npx --package=<abs path to tgz> truthgate …`. The published form, `npx truthgate`, is unaffected.

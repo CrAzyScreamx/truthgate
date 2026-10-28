@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { expr, ExprError, PY_HELPERS } from '../../src/core/expr.ts';
+import { expr, ExprCostError, ExprError, PY_HELPERS } from '../../src/core/expr.ts';
 
 const ev = (src: string, env: Record<string, unknown> = {}) => expr.evaluate(expr.parse(src), env);
 
@@ -134,10 +134,17 @@ test('numbers compare with a relative tolerance', () => {
 
 test('integers compare exactly (no tolerance)', () => {
   assert.equal(ev('1000000000 == 1000000001'), false);
+  // round 3: the relative tolerance must not swallow cents on large totals, yet still absorb float drift
+  assert.equal(ev('5000000000.01 + 0 == 5000000000.99'), false);
+  assert.equal(ev('0.1 + 0.2 == 0.3'), true);
+  assert.equal(ev('60.72 + 0.05 == 60.77'), true);
+  // the step cap is its own error class, so runners can report UNVERIFIED instead of FALSIFIED
+  assert.throws(() => ev('all(i in range(1000): count(range(1000), i) == 1)'), ExprCostError);
   assert.equal(ev('1700000000000 == 1700000000999'), false);
   assert.equal(ev('5000000000 < 5000000004'), true);
   assert.equal(ev('out[0] < out[1]', { out: [5000000000, 5000000004] }), true);
-  assert.equal(ev('3 == 3.0000000001'), true); // one side is not an integer
+  assert.equal(ev('3 == 3.0000000000001'), true); // one side is not an integer: float-drift-sized gap
+  assert.equal(ev('3 == 3.0000000001'), false); // 1e-10 relative is a real difference, not drift
 });
 
 test('one evaluate() is capped at 1e6 steps; separate calls do not accumulate', () => {
@@ -216,6 +223,7 @@ const PARITY: [string, Record<string, unknown>][] = [
   ['unique(range(2000))', {}],
   ['all(i in range(500): all(j in range(498): true))', {}],
   ['[1000000000 == 1000000001, 1700000000000 == 1700000000999, 5000000000 < 5000000004, 3 == 3.0000000001]', {}],
+  ['[5000000000.01 + 0 == 5000000000.99, 0.1 + 0.2 == 0.3, 60.72 + 0.05 == 60.77]', {}],
   ['all(i in range(3000): len(range(100000)) > 0)', {}],
   ['all(i in range(20): len(sorted(xs) + [1]) > 0)', { xs: Array.from({ length: 60000 }, () => 1) }],
   ['len(keys(r)) + len(values(r)) + count(range(10), 1) + sum(range(10))', { r: { a: 1, b: 2 } }],

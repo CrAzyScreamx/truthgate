@@ -175,11 +175,16 @@ export async function runApprove(
   const t = await approvalsTrust(root, old.commit);
   const findings = await absorbed(root, specs, old.commit);
   const head = await commitOf(root, 'HEAD');
+  // No record on this machine: HEAD's approvals and tests may already carry an agent's edits, and there is
+  // no trusted baseline to diff them against. Inherit nothing and say so, so the user decides each spec afresh.
+  const fresh = old.source === 'head';
+  if (fresh)
+    say('No truthgate baseline is recorded on this machine, so changes made before this commit cannot be listed. Every spec is shown for approval; from now on truthgate checks against this commit.');
   const approved: Approvals['specs'] = Object.create(null);
-  if (t.a && !t.edited) Object.assign(approved, t.a.specs);
-  else if (t.a !== undefined) say('The approvals file was edited outside `truthgate approve`, so every spec needs approval again.');
+  if (t.a && !t.edited && !fresh) Object.assign(approved, t.a.specs);
+  else if (t.a !== undefined && !fresh) say('The approvals file was edited outside `truthgate approve`, so every spec needs approval again.');
 
-  let changed = t.a !== undefined && !!t.edited;
+  let changed = t.a !== undefined && (!!t.edited || fresh);
   for (const id of Object.keys(approved)) {
     if (specs.some((s) => s.id === id)) continue;
     delete approved[id];

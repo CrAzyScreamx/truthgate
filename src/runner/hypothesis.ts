@@ -91,6 +91,10 @@ def check(name, prop):
         r["runs"] += 1
         try:
             ok, err = _bool(prop({**inp, "out": out})), ""
+        except ExprCostError as e:
+            # too expensive to evaluate says nothing about the code: UNVERIFIED, never FALSIFIED
+            r["abort"] = f"expression error: {e}"
+            return
         except Exception as e:
             # requires held, so an error here comes from the output: a failure, not a dodge
             ok, err = False, f" (expression error: {e})"
