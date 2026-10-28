@@ -91,7 +91,11 @@ export type Helper =
 export interface ExprApi {
   /** Throws ExprError with a position on bad syntax or unknown helper. */
   parse(src: string): Expr;
-  /** Pure. Throws ExprError on type errors (reported as UNVERIFIED, not FALSIFIED). */
+  /** Pure. Throws ExprError on type errors. Numbers compare (== != < <= > >=) with tolerance
+   *  1e-9 * max(1, |a|, |b|) so decimal inputs don't drift; toPython must match.
+   *  Quantifiers are capped at 1e6 total iterations per evaluate() (ExprError past it).
+   *  Runner mapping: ExprError in `requires` -> UNVERIFIED; ExprError in an ensures/invariant whose
+   *  requires held -> FALSIFIED with that input (wrong-typed output is a failure, not a dodge). */
   evaluate(e: Expr, env: Record<string, unknown>): unknown;
   /** Python source equivalent of `e`, using helpers from the generated harness module. */
   toPython(e: Expr): string;
@@ -132,7 +136,8 @@ export interface TamperFinding {
     | 'test-deleted'
     | 'spec-changed'
     | 'spec-deleted'
-    | 'approvals-edited';
+    | 'approvals-edited'
+    | 'config-edited';
   detail: string;
 }
 
@@ -271,7 +276,18 @@ export interface AgentInstaller {
 // src/core/config.ts    export function loadConfig(root: string): Promise<Config>
 // src/core/state.ts     export function readState(root): Promise<State>; writeState(root, s): Promise<void>
 // src/core/approve.ts   export function checkApprovals(root, specs): Promise<TamperFinding[]>; runApprove(root): Promise<number>
-// src/core/diff.ts      export function changedFiles(root: string): Promise<string[]>
+//                       export function approvalStates(root, specs): Promise<Record<string, 'approved'|'pending'|'changed'>>
+// src/core/baseline.ts  User-local store OUTSIDE the repo: `${TRUTHGATE_HOME ?? ~/.truthgate}/repos/<sha256(realpath root)>.json`
+//                       = { baseline: commit sha | null, approvedSha: sha256 of approved.json as written by approve, updatedAt }.
+//                       export function readBaseline(root): Promise<{ commit: string; source: 'approve' | 'clean-run' | 'head' }>
+//                         (no record, or recorded commit no longer exists -> HEAD with source 'head' + verify warns)
+//                       export function writeBaseline(root, patch: { commit?: string; approvedSha?: string }): Promise<void>
+//                       approve: writes approved.json, then records approvedSha and baseline = HEAD.
+//                       verify: on a run with no FALSIFIED and no tamper AND a clean working tree, advances baseline to HEAD.
+//                       Tamper/approval/config rules compare against `baseline`, never against an agent-movable HEAD.
+//                       approved.json counts as edited unless its sha equals approvedSha or its content at `baseline`.
+//                       config.json counts as edited ('config-edited') if it differs from its content at `baseline`.
+// src/core/diff.ts      export function changedFiles(root: string, base?: string): Promise<string[]>  (base default HEAD; --no-renames)
 // src/core/tamper.ts    export function detectTamper(root: string, changed: string[]): Promise<TamperFinding[]>
 // src/core/weak.ts      export function weakSpecCheck(spec: Spec): Verdict[]
 // src/core/verify.ts    export function verify(root: string, opts: { deep?: boolean; all?: boolean; budgetSeconds?: number }): Promise<RunReport>
