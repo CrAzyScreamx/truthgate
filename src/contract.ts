@@ -57,6 +57,9 @@ export interface Spec {
   /** true: a `crash` result is not by itself a failure. */
   allowCrash?: boolean;
   prove?: ProveConfig;
+  /** How to start this spec's shim (non-js/ts). Default: the adapter's convention for the shim path
+   *  from `shimTemplate`. Tokens: {root} {shim}. Example: ["go","run","{shim}"]. */
+  shim?: { command: string[]; cwd?: string };
   /** Path of the spec file, relative to repo root, forward slashes. Set by the loader. */
   file: string;
 }
