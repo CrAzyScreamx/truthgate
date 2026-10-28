@@ -4,7 +4,7 @@
   "description": "Verify agent-written code against user-approved specs. Honest verdicts, never more than was established.",
   "type": "module",
   "bin": { "truthgate": "dist/cli.js" },
-  "files": ["dist", "assets", "src/lang/**/templates"],
+  "files": ["dist", "assets", "src/lang/*/templates/**"],
   "engines": { "node": ">=22" },
   "scripts": {
     "build": "tsc -p tsconfig.json",

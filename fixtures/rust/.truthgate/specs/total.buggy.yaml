@@ -1,0 +1,8 @@
+id: total.buggy
+target: src/lib.rs::total_buggy
+lang: rust
+inputs:
+  xs: list<int[-1000,1000]>
+ensures:
+  - name: sum
+    expr: "out == sum(xs)"

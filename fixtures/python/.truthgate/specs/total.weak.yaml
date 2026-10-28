@@ -1,0 +1,8 @@
+id: total.weak
+target: src/totals.py::total
+lang: python
+inputs:
+  xs: list<int[0,1000]>
+ensures:
+  - name: nonneg
+    expr: "out >= 0"

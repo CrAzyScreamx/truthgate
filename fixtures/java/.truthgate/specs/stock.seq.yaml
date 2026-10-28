@@ -1,0 +1,12 @@
+id: stock.seq
+target: src/fixture/Stock.java::Stock
+lang: java
+kind: sequence
+ops:
+  - name: add
+    inputs: { n: "int[1,5]" }
+  - name: remove
+    inputs: { n: "int[1,5]" }
+invariant:
+  - name: nonneg
+    expr: "state.qty >= 0"

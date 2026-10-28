@@ -1,0 +1,8 @@
+id: total.buggy
+target: src/fixture/Totals.java::totalBuggy
+lang: java
+inputs:
+  xs: list<int[-1000,1000]>
+ensures:
+  - name: sum
+    expr: "out == sum(xs)"

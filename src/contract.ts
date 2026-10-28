@@ -211,8 +211,9 @@ export interface LanguageAdapter {
   available(root: string): Promise<true | string>;
   /** Start the shim (or import the module) for this spec's target. */
   open(spec: Spec, root: string): Promise<FunctionCaller>;
-  /** Ready-to-save shim source for this spec, plus where to save it. */
-  shimTemplate(spec: Spec): { path: string; source: string };
+  /** Ready-to-save shim source for this spec, plus where to save it. `root` lets Go/Rust read go.mod/Cargo.toml.
+   *  path '' = no shim needed (js/ts). */
+  shimTemplate(spec: Spec, root?: string): { path: string; source: string };
   /** Test-file globs (forward slashes) for tamper detection. */
   testFileGlobs: string[];
   /** Line patterns that mark a skipped/disabled test. */

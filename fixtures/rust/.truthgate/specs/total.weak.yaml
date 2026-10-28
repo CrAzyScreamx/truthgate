@@ -1,0 +1,8 @@
+id: total.weak
+target: src/lib.rs::total
+lang: rust
+inputs:
+  xs: list<int[0,1000]>
+ensures:
+  - name: nonneg
+    expr: "out >= 0"

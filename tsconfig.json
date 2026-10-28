@@ -12,6 +12,7 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
+    "types": ["node"],
     "declaration": false,
     "sourceMap": false
   },
