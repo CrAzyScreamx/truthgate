@@ -64,7 +64,7 @@ test('verify: selects by changed target, warns, shares the deadline, blocks on F
   });
   await put(root, 'src/a.py', '2');
   await put(root, 'src/c.py', '2');
-  await put(root, 'tests/test_new.py', 'assert 1');
+  await put(root, 'tests/test_new.py', 'assert f(1) == 1');
   const calls: [string, RunOptions][] = [];
   const runSpec = async (s: Spec, _r: string, o: RunOptions): Promise<Verdict[]> => {
     calls.push([s.id, o]);
@@ -151,4 +151,29 @@ test('formatReport', () => {
   assert.match(text, /WARN\s+x\.py changed/);
   assert.match(text, /1 PROVEN \(model only\), 1 FALSIFIED, 1 TESTED, 1 WEAK SPEC · 1 tamper finding · 1 warning/);
   assert.match(text, /BLOCKING: 1 FALSIFIED verdict and 1 tamper finding\./);
+});
+
+test('verify advances the baseline only on a clean, fully verified run with a clean tree', async () => {
+  const { readBaseline } = await import('../../src/core/baseline.ts');
+  const { execFileSync } = await import('node:child_process');
+  const root = await repo({ '.truthgate/specs/a.yaml': SPEC('a', 'src/a.py::f'), 'src/a.py': '1', '.gitignore': '.truthgate/last-run.json\n' });
+  const ok = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, property: 'p', kind: 'TESTED', detail: 'ok', durationMs: 0 }];
+  const unverified = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, kind: 'UNVERIFIED', detail: 'shim error', durationMs: 0 }];
+  const { commitOf } = await import('../../src/core/diff.ts');
+  const first = await commitOf(root, 'HEAD');
+  const r0 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.ok(r0.warnings.some((w) => /no truthgate baseline recorded/.test(w)));
+  assert.deepEqual(await readBaseline(root), { commit: first, source: 'clean-run' }); // clean tree, nothing failed
+  await put(root, 'src/a.py', '2');
+  await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] }); // dirty tree: no advance
+  execFileSync('git', ['commit', '-qam', 'two'], { cwd: root });
+  assert.equal((await readBaseline(root)).commit, first);
+  await verify(root, {}, { runSpec: unverified, adapters: [pyAdapter] }); // UNVERIFIED: no advance
+  assert.equal((await readBaseline(root)).commit, first);
+  assert.equal((await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] })).blocking, false);
+  assert.deepEqual(await readBaseline(root), { commit: await commitOf(root, 'HEAD'), source: 'clean-run' });
+  // Once advanced, the warning goes away and the committed target no longer counts as changed.
+  const r2 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.ok(!r2.warnings.some((w) => /no truthgate baseline/.test(w)));
+  assert.deepEqual(r2.verdicts, []);
 });

@@ -14,7 +14,7 @@ export const windsurf: AgentInstaller = {
   },
   manualSteps: [
     'Windsurf/Devin reads MCP servers only from user config. Add this to ' +
-      (process.platform === 'win32' ? '%APPDATA%\devin\mcp_config.json' : '~/.config/devin/mcp_config.json') +
+      (process.platform === 'win32' ? '%APPDATA%\\devin\\mcp_config.json' : '~/.config/devin/mcp_config.json') +
       ':\n' + json({ mcpServers: { truthgate: mcp } }).trimEnd(),
   ],
 };

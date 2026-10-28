@@ -59,8 +59,8 @@ Status values: Pending · In Progress · Done · Blocked (with the reason).
 | ID | Task | Owner | Status |
 |---|---|---|---|
 | M5.1 | Integrate, run the definition of done, commit | lead | Done |
-| M5.2 | Review round 1 (R1 security/correctness, R2 plan fidelity/simplicity/DoD) | R1, R2 | Pending |
-| M5.3 | Fix round 1 | coders | Pending |
+| M5.2 | Review round 1 (R1 security/correctness, R2 plan fidelity/simplicity/DoD) | R1, R2 | Done |
+| M5.3 | Fix round 1 | coders | Done |
 | M5.4 | Review round 2 + fixes (last round; leftovers → KNOWN_ISSUES.md) | all | Pending |
 
 ## Contract requests

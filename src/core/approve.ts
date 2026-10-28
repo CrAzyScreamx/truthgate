@@ -5,11 +5,14 @@ import { createInterface } from 'node:readline';
 import type { Approvals, Spec, TamperFinding } from '../contract.ts';
 import { loadSpecs, SpecError, targetFile } from './spec.ts';
 import { describeType, parseType } from './typespec.ts';
-import { showHead } from './diff.ts';
+import { commitOf, showAt } from './diff.ts';
+import { readBaseline, readRecord, writeBaseline } from './baseline.ts';
+import { CONFIG_FILE } from './config.ts';
 
 export const APPROVALS_FILE = '.truthgate/approved.json';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const lf = (s: string) => s.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
 const canonical = (v: unknown): string =>
   Array.isArray(v)
     ? `[${v.map(canonical).join(',')}]`
@@ -17,21 +20,19 @@ const canonical = (v: unknown): string =>
       ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(',')}}`
       : JSON.stringify(v);
 
-/** sha256 of the spec text with line endings normalized to LF (and no BOM). */
-export const specHash = (text: string) => sha256(text.replace(/^﻿/, '').replace(/\r\n?/g, '\n'));
+/** sha256 of a text file with line endings normalized to LF (and no BOM). Used for specs and approved.json. */
+export const specHash = (text: string) => sha256(lf(text));
+/** Secondary check only: anyone can recompute it. Trust comes from the baseline (see approvalsTrust). */
 export const integrityOf = (specs: Approvals['specs']) => sha256(canonical(specs));
 
 const hashSpec = async (root: string, s: Spec) => specHash(await readFile(join(root, s.file), 'utf8'));
-
-/** The approvals file, `undefined` if absent, `null` if unreadable or malformed. */
-export async function readApprovals(root: string): Promise<Approvals | undefined | null> {
-  let text: string;
-  try {
-    text = await readFile(join(root, APPROVALS_FILE), 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+const readText = (root: string, file: string) =>
+  readFile(join(root, file), 'utf8').catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT') return undefined;
     throw e;
-  }
+  });
+
+function parseApprovals(text: string): Approvals | null {
   try {
     const a = JSON.parse(text) as Approvals;
     const ok =
@@ -46,12 +47,33 @@ export async function readApprovals(root: string): Promise<Approvals | undefined
   }
 }
 
+/** The approvals file, `undefined` if absent, `null` if unreadable or malformed. */
+export async function readApprovals(root: string): Promise<Approvals | undefined | null> {
+  const text = await readText(root, APPROVALS_FILE);
+  return text === undefined ? undefined : parseApprovals(text);
+}
+
+/** approved.json is trusted only if it is byte-for-byte (modulo line endings) the file `approve`
+ *  last wrote on this machine, or the file at the baseline commit. `edited` says why not. */
+async function approvalsTrust(root: string, base: string): Promise<{ a: Approvals | undefined | null; edited?: string }> {
+  const text = await readText(root, APPROVALS_FILE);
+  const atBase = await showAt(root, base, APPROVALS_FILE);
+  const approvedSha = (await readRecord(root))?.approvedSha;
+  if (text === undefined) return { a: undefined, edited: atBase !== undefined || approvedSha ? 'approvals file deleted' : undefined };
+  const a = parseApprovals(text);
+  if (a === null) return { a, edited: 'approvals file is unreadable or malformed' };
+  const known = specHash(text) === approvedSha || (atBase !== undefined && lf(atBase) === lf(text));
+  if (!known || integrityOf(a.specs) !== a.integrity)
+    return { a, edited: 'approvals file differs from what `truthgate approve` wrote and from the baseline commit' };
+  return { a };
+}
+
 export type ApprovalState = 'approved' | 'pending' | 'changed';
 
-/** Per-spec approval state. Approvals that fail the integrity check count as absent. */
-export async function approvalStates(root: string, specs: Spec[]): Promise<Record<string, ApprovalState>> {
-  const a = await readApprovals(root);
-  const trusted = a && integrityOf(a.specs) === a.integrity ? a.specs : {};
+/** Per-spec approval state. An untrusted approvals file counts as absent. */
+export async function approvalStates(root: string, specs: Spec[], base?: string): Promise<Record<string, ApprovalState>> {
+  const t = await approvalsTrust(root, base ?? (await readBaseline(root)).commit);
+  const trusted = t.a && !t.edited ? t.a.specs : {};
   const out: Record<string, ApprovalState> = {};
   for (const s of specs) {
     const entry = Object.hasOwn(trusted, s.id) ? trusted[s.id] : undefined;
@@ -60,23 +82,25 @@ export async function approvalStates(root: string, specs: Spec[]): Promise<Recor
   return out;
 }
 
-/** Tamper rules for specs and the approvals file: spec-changed, spec-deleted, approvals-edited. */
-export async function checkApprovals(root: string, specs: Spec[]): Promise<TamperFinding[]> {
-  const a = await readApprovals(root);
-  if (a === undefined) {
-    const wasCommitted = (await showHead(root, APPROVALS_FILE)) !== undefined;
-    return wasCommitted ? [{ file: APPROVALS_FILE, rule: 'approvals-edited', detail: 'approvals file deleted' }] : [];
-  }
-  if (a === null) return [{ file: APPROVALS_FILE, rule: 'approvals-edited', detail: 'approvals file is unreadable or malformed' }];
+/** Tamper rules against the baseline: spec-changed, spec-deleted, approvals-edited, config-edited. */
+export async function checkApprovals(root: string, specs: Spec[], base?: string): Promise<TamperFinding[]> {
+  base ??= (await readBaseline(root)).commit;
   const findings: TamperFinding[] = [];
-  if (integrityOf(a.specs) !== a.integrity)
-    findings.push({ file: APPROVALS_FILE, rule: 'approvals-edited', detail: 'approvals file was edited outside `truthgate approve`' });
-  for (const [id, entry] of Object.entries(a.specs)) {
+  const t = await approvalsTrust(root, base);
+  if (t.edited) findings.push({ file: APPROVALS_FILE, rule: 'approvals-edited', detail: t.edited });
+  for (const [id, entry] of Object.entries(t.a?.specs ?? {})) {
     const s = specs.find((x) => x.id === id);
     if (!s) findings.push({ file: APPROVALS_FILE, rule: 'spec-deleted', detail: `approved spec "${id}" no longer exists` });
     else if ((await hashSpec(root, s)) !== entry.sha256)
       findings.push({ file: s.file, rule: 'spec-changed', detail: `approved spec "${id}" changed since approval; ask the user to run \`truthgate approve\`` });
   }
+  const [cfg, cfgBase] = [await readText(root, CONFIG_FILE), await showAt(root, base, CONFIG_FILE)];
+  if ((cfg === undefined ? undefined : lf(cfg)) !== (cfgBase === undefined ? undefined : lf(cfgBase)))
+    findings.push({
+      file: CONFIG_FILE,
+      rule: 'config-edited',
+      detail: `${CONFIG_FILE} differs from the baseline commit; if the user made this change, they commit it and run \`truthgate approve\``,
+    });
   return findings;
 }
 
@@ -105,7 +129,8 @@ export interface ApproveIO {
   isTTY: boolean;
 }
 
-/** Interactive approval. Refuses (exit 2) without a TTY so an agent can never approve its own spec. */
+/** Interactive approval. Refuses (exit 2) without a TTY so an agent can never approve its own spec.
+ *  Records approved.json's hash and baseline = HEAD in the user-local store (baseline.ts). */
 export async function runApprove(
   root: string,
   io: ApproveIO = { input: process.stdin, output: process.stdout, isTTY: !!process.stdin.isTTY && !!process.stdout.isTTY },
@@ -123,12 +148,12 @@ export async function runApprove(
     process.stderr.write(`${e.message}\n`);
     return 2;
   }
-  const a = await readApprovals(root);
+  const t = await approvalsTrust(root, (await readBaseline(root)).commit);
   const approved: Approvals['specs'] = Object.create(null);
-  if (a && integrityOf(a.specs) === a.integrity) Object.assign(approved, a.specs);
-  else if (a !== undefined) say('The approvals file was edited outside `truthgate approve`, so every spec needs approval again.');
+  if (t.a && !t.edited) Object.assign(approved, t.a.specs);
+  else if (t.a !== undefined) say('The approvals file was edited outside `truthgate approve`, so every spec needs approval again.');
 
-  let changed = false;
+  let changed = t.a !== undefined && !!t.edited;
   for (const id of Object.keys(approved)) {
     if (specs.some((s) => s.id === id)) continue;
     delete approved[id];
@@ -158,12 +183,16 @@ export async function runApprove(
   } finally {
     rl.close();
   }
-  if (changed || (a !== undefined && a?.integrity !== integrityOf(approved))) {
+  if (changed) {
     const specsSorted = Object.fromEntries(Object.entries(approved).sort(([x], [y]) => (x < y ? -1 : 1)));
     const out: Approvals = { version: 1, specs: specsSorted, integrity: integrityOf(specsSorted) };
     await mkdir(join(root, '.truthgate'), { recursive: true });
     await writeFile(join(root, APPROVALS_FILE), JSON.stringify(out, null, 2) + '\n');
     say(`Wrote ${APPROVALS_FILE}. Commit it with the specs.`);
   }
+  const text = await readText(root, APPROVALS_FILE);
+  const head = await commitOf(root, 'HEAD');
+  await writeBaseline(root, { ...(text !== undefined && { approvedSha: specHash(text) }), ...(head && { commit: head, source: 'approve' as const }) });
+  if (head) say(`Baseline set to ${head.slice(0, 7)} (HEAD): truthgate now checks tests, specs and config against this commit.`);
   return 0;
 }

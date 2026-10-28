@@ -11,6 +11,9 @@ import type { Expr, ExprApi, Helper } from '../contract.ts';
 //   abs(n) · round(x, places=0) half away from zero · sorted(xs) ascending · perm(a, b): b is a
 //   rearrangement of a · unique(xs): no two elements equal · count(xs, v): elements equal to v ·
 //   range(n) / range(a, b) (at most 100000 items) · keys(o) / values(o) in sorted key order.
+// - Numbers are equal within 1e-9 * max(1, |a|, |b|) (==, !=, ordering, and the equality inside
+//   perm/unique/count), so decimal inputs don't drift.
+// - One evaluate() may take at most 1e6 steps (quantifier iterations + perm/unique comparisons).
 // - Any type error, missing field/variable or bad index throws ExprError (Python: ExprError).
 // ponytail: numbers are JS doubles; Python ints beyond 2^53 can disagree with the JS evaluator.
 
@@ -30,6 +33,15 @@ const HELPER_ARITY: Record<Helper, [number, number]> = {
 const KEYWORDS = new Set(['and', 'or', 'not', 'implies', 'in', 'true', 'false', 'null', 'all', 'any']);
 const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
 const RANGE_MAX = 100000;
+const STEP_MAX = 1_000_000;
+const TOL = 1e-9;
+
+// Step budget for the current evaluate() call (evaluate is synchronous, so one counter suffices).
+let steps = 0;
+const tick = (n = 1) => {
+  if ((steps += n) > STEP_MAX) fail(`expression too expensive: more than ${STEP_MAX} steps`);
+};
+const numEq = (a: number, b: number) => a === b || Math.abs(a - b) <= TOL * Math.max(1, Math.abs(a), Math.abs(b));
 
 // ---------------------------------------------------------------------------------------------
 // Parser
@@ -279,13 +291,13 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     const x = a as Env, y = b as Env, kx = Object.keys(x);
     return kx.length === Object.keys(y).length && kx.every((k) => Object.hasOwn(y, k) && deepEqual(x[k], y[k]));
   }
-  return a === b;
+  return ta === 'number' ? numEq(a as number, b as number) : a === b;
 }
 
 function cmp(a: unknown, b: unknown): number {
   const ta = tn(a), tb = tn(b);
   if (ta !== tb || (ta !== 'number' && ta !== 'string')) fail(`cannot compare ${ta} and ${tb}`);
-  if (ta === 'number') return (a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : 0;
+  if (ta === 'number') return numEq(a as number, b as number) ? 0 : (a as number) < (b as number) ? -1 : 1;
   const x = [...(a as string)], y = [...(b as string)];
   for (let i = 0; i < Math.min(x.length, y.length); i++) {
     const d = x[i]!.codePointAt(0)! - y[i]!.codePointAt(0)!;
@@ -349,6 +361,7 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
   perm(a, b) {
     const x = asList(a), y = asList(b);
     if (x.length !== y.length) return false;
+    tick(x.length * y.length);
     const used = y.map(() => false);
     return x.every((v) => {
       const j = y.findIndex((w, k) => !used[k] && deepEqual(v, w));
@@ -357,6 +370,7 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
   },
   unique(xs) {
     const x = asList(xs);
+    tick(x.length * x.length);
     return x.every((v, i) => x.slice(i + 1).every((w) => !deepEqual(v, w)));
   },
   count: (xs, v) => asList(xs).filter((x) => deepEqual(x, v)).length,
@@ -372,25 +386,25 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
   },
 };
 
-function evaluate(e: Expr, env: Env): unknown {
+function ev(e: Expr, env: Env): unknown {
   switch (e.k) {
     case 'lit':
       return e.v;
     case 'var':
       return Object.hasOwn(env, e.name) ? env[e.name] : fail(`unknown variable "${e.name}"`);
     case 'list':
-      return e.items.map((x) => evaluate(x, env));
+      return e.items.map((x) => ev(x, env));
     case 'obj': {
       const o: Env = Object.create(null);
-      for (const [k, v] of e.entries) o[k] = evaluate(v, env);
+      for (const [k, v] of e.entries) o[k] = ev(v, env);
       return o;
     }
     case 'get': {
-      const o = asObj(evaluate(e.obj, env));
+      const o = asObj(ev(e.obj, env));
       return Object.hasOwn(o, e.key) ? o[e.key] : fail(`no field "${e.key}"`);
     }
     case 'index': {
-      const o = evaluate(e.obj, env), i = evaluate(e.index, env), t = tn(o);
+      const o = ev(e.obj, env), i = ev(e.index, env), t = tn(o);
       if (t === 'list' || t === 'string') {
         const xs = t === 'list' ? (o as unknown[]) : [...(o as string)], n = asInt(i);
         return n >= 0 && n < xs.length ? xs[n] : fail(`index ${n} out of range`);
@@ -402,13 +416,13 @@ function evaluate(e: Expr, env: Env): unknown {
       return fail(`cannot index ${t}`);
     }
     case 'un':
-      return e.op === 'not' ? !asBool(evaluate(e.arg, env)) : -asNum(evaluate(e.arg, env));
+      return e.op === 'not' ? !asBool(ev(e.arg, env)) : -asNum(ev(e.arg, env));
     case 'bin': {
       const { op } = e;
-      if (op === 'and') return asBool(evaluate(e.l, env)) ? asBool(evaluate(e.r, env)) : false;
-      if (op === 'or') return asBool(evaluate(e.l, env)) ? true : asBool(evaluate(e.r, env));
-      if (op === 'implies') return asBool(evaluate(e.l, env)) ? asBool(evaluate(e.r, env)) : true;
-      const l = evaluate(e.l, env), r = evaluate(e.r, env);
+      if (op === 'and') return asBool(ev(e.l, env)) ? asBool(ev(e.r, env)) : false;
+      if (op === 'or') return asBool(ev(e.l, env)) ? true : asBool(ev(e.r, env));
+      if (op === 'implies') return asBool(ev(e.l, env)) ? asBool(ev(e.r, env)) : true;
+      const l = ev(e.l, env), r = ev(e.r, env);
       if (op === '==') return deepEqual(l, r);
       if (op === '!=') return !deepEqual(l, r);
       if (op === '<') return cmp(l, r) < 0;
@@ -419,13 +433,14 @@ function evaluate(e: Expr, env: Env): unknown {
     }
     case 'quant': {
       const want = e.q === 'all';
-      for (const x of asList(evaluate(e.over, env))) {
-        if (asBool(evaluate(e.body, { __proto__: null, ...env, [e.v]: x } as Env)) !== want) return !want;
+      for (const x of asList(ev(e.over, env))) {
+        tick();
+        if (asBool(ev(e.body, { __proto__: null, ...env, [e.v]: x } as Env)) !== want) return !want;
       }
       return want;
     }
     case 'call':
-      return HELPERS[e.fn](...e.args.map((a) => evaluate(a, env)));
+      return HELPERS[e.fn](...e.args.map((a) => ev(a, env)));
   }
 }
 
@@ -540,11 +555,25 @@ def _index(o, i):
         return o[i]
     _err("cannot index " + t)
 
+_steps = [0]
+
+def _tick(n=1):
+    _steps[0] += n
+    if _steps[0] > 1000000: _err("expression too expensive: more than 1000000 steps")
+
+def _run(f):
+    _steps[0] = 0
+    return f()
+
+def _numeq(a, b):
+    return a == b or abs(a - b) <= 1e-9 * max(1, abs(a), abs(b))
+
 def _eq(a, b):
     ta = _tn(a)
     if ta != _tn(b): return False
     if ta == "list": return len(a) == len(b) and all(_eq(x, y) for x, y in zip(a, b))
     if ta == "object": return set(a) == set(b) and all(_eq(a[k], b[k]) for k in a)
+    if ta == "number": return _numeq(a, b)
     return ta == "null" or a == b
 
 def _ne(a, b):
@@ -553,6 +582,7 @@ def _ne(a, b):
 def _cmp(a, b):
     ta, tb = _tn(a), _tn(b)
     if ta != tb or ta not in ("number", "string"): _err("cannot compare " + ta + " and " + tb)
+    if ta == "number" and _numeq(a, b): return 0
     return (a > b) - (a < b)
 
 def _lt(a, b): return _cmp(a, b) < 0
@@ -582,11 +612,13 @@ def _mod(a, b):
 
 def _all(xs, f):
     for x in _list(xs):
+        _tick()
         if not _bool(f(x)): return False
     return True
 
 def _any(xs, f):
     for x in _list(xs):
+        _tick()
         if _bool(f(x)): return True
     return False
 
@@ -628,6 +660,7 @@ def _sorted(xs):
 def _perm(a, b):
     a, b = _list(a), _list(b)
     if len(a) != len(b): return False
+    _tick(len(a) * len(b))
     used = [False] * len(b)
     for x in a:
         for j, y in enumerate(b):
@@ -640,6 +673,7 @@ def _perm(a, b):
 
 def _unique(xs):
     xs = _list(xs)
+    _tick(len(xs) * len(xs))
     return not any(_eq(xs[i], xs[j]) for i in range(len(xs)) for j in range(i + 1, len(xs)))
 
 def _count(xs, v):
@@ -658,4 +692,9 @@ def _values(o):
     return [o[k] for k in sorted(o.keys())]
 `;
 
-export const expr: ExprApi = { parse, evaluate, toPython: (e) => toPython(e) };
+function evaluate(e: Expr, env: Env): unknown {
+  steps = 0;
+  return ev(e, env);
+}
+
+export const expr: ExprApi = { parse, evaluate, toPython: (e) => `_run(lambda: ${toPython(e)})` };

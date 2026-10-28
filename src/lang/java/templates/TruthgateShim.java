@@ -4,7 +4,7 @@
 // Target: env TRUTHGATE_CLASS (fully qualified). function specs: a public static method by name and arity.
 // sequence specs: reset -> new Class(); ops -> public instance methods; state -> state() if present, else the object's fields.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
-// IllegalArgumentException thrown by your code -> rejected; any other Throwable -> crash. A missing method exits (shim error).
+// IllegalArgumentException, or an exception class named Rejected, thrown by your code -> rejected; any other Throwable -> crash. A missing method exits (shim error).
 // JSON limits: ints arrive as long and are narrowed to int/short/byte params; decimals as double (or float).
 // Params may be primitives/boxed, String, List<T>, T[], Map<String,Object>. Outputs: null, Boolean, Number, String,
 // Character, Enum, Map, Collection, arrays, records, else the object's fields. NaN/Infinity -> crash.
@@ -36,7 +36,7 @@ public class TruthgateShim {
       } catch (Throwable e) {
         boolean user = e instanceof InvocationTargetException;
         Throwable c = user ? e.getCause() : e;
-        reply = "{\"error\":" + q(c.toString()) + ",\"kind\":\"" + (user && c instanceof IllegalArgumentException ? "rejected" : "crash") + "\"}";
+        reply = "{\"error\":" + q(c.toString()) + ",\"kind\":\"" + (user && (c instanceof IllegalArgumentException || c.getClass().getSimpleName().equals("Rejected")) ? "rejected" : "crash") + "\"}";
       }
       proto.println(reply);
     }

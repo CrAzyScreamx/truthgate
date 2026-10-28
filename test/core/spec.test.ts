@@ -115,7 +115,7 @@ test('loadConfig fills defaults, merges, validates', async () => {
   assert.deepEqual(c.provers, { rocq: 'D:/r/bin' });
   assert.deepEqual(c.python, { native: false });
   await writeFile(join(root, '.truthgate/config.json'), '{"seed": "x"}');
-  await assert.rejects(loadConfig(root), /seed has the wrong type/);
+  await assert.rejects(loadConfig(root), /config.json: seed: has the wrong type/);
   await writeFile(join(root, '.truthgate/config.json'), '{nope');
   await assert.rejects(loadConfig(root), /config\.json/);
 });
@@ -141,4 +141,15 @@ test('globs', () => {
   assert.ok(globToRegExp('src/**').test('src/a/b'));
   assert.ok(globToRegExp('a?.go').test('ab.go'));
   assert.ok(!globToRegExp('a.go').test('aXgo'));
+});
+
+test('loadConfig rejects budgets, runs and loop caps below 1 as SpecError', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tg-cfg-'));
+  await mkdir(join(root, '.truthgate'));
+  for (const bad of [{ budgetSeconds: 0 }, { defaultRuns: 0 }, { loopCap: 0 }, { deepBudgetSeconds: 0.5 }, { defaultRuns: 1.5 }, { budgetSeconds: -1 }]) {
+    await writeFile(join(root, '.truthgate/config.json'), JSON.stringify(bad));
+    await assert.rejects(loadConfig(root), (e: unknown) => e instanceof SpecError && /config\.json: /.test(e.message), JSON.stringify(bad));
+  }
+  await writeFile(join(root, '.truthgate/config.json'), JSON.stringify({ budgetSeconds: 1, defaultRuns: 1, loopCap: 1 }));
+  assert.equal((await loadConfig(root)).budgetSeconds, 1);
 });

@@ -13,9 +13,10 @@ Python may also run natively through Hypothesis when it is installed; the shim i
 ```
 npx truthgate shim <spec-id>
 ```
-This prints a ready-made shim for the spec's language and the path to save it at (or call the MCP
-`shim_template` tool). Save it there, then wire the target function or class into it. Usually you
-only edit the dispatch section; keep the protocol code as-is.
+This **writes** the template to the path it prints. It won't replace an existing file unless you
+pass `--force`. The MCP `shim_template` tool returns the same source and path without writing.
+- **Python, Java, C#:** the shims are generic. Leave them exactly as written.
+- **Go, Rust:** fill in only the parts the template marks. Keep the protocol code as-is.
 
 ## Protocol (one persistent process per spec run)
 Requests, one JSON object per line:
@@ -31,8 +32,12 @@ Responses, exactly one line per request:
 Rules:
 - Write **nothing else to stdout**: no logs, prints or banners. Use stderr for debugging.
 - Flush after every response line.
-- Map the language's validation exception (e.g. `ValueError`, `IllegalArgumentException`,
-  `ArgumentException`, a returned `error`, `Err(..)`) to `rejected`, and everything else to `crash`.
+- Only an explicit refusal counts as `rejected`:
+  - Python `ValueError`, Java `IllegalArgumentException`, C# `ArgumentException`
+  - an exception class named `Rejected`
+  - Go: a trailing non-nil `error` result. Rust: `Err(..)`. JS: `RangeError`.
+
+  Anything else is a `crash`, including `TypeError`/`NullPointerException`. To refuse an input, throw one of these. Never catch bugs and report them as rejections.
 - Return plain JSON: numbers, strings, bools, null, arrays, objects. Convert decimals, enums and
   dates explicitly. `state` should expose the fields that the spec's `invariant` reads.
 

@@ -9,9 +9,17 @@ const tmp = () => mkdtemp(join(tmpdir(), 'tg-apply-'));
 
 test('mergeInto: adds keys, appends arrays without dupes, keeps user scalars', () => {
   const base = { a: 1, o: { x: 1 }, arr: [{ k: 1 }] };
-  const added = mergeInto(base, { a: 2, b: 3, o: { y: 2 }, arr: [{ k: 1 }, { k: 2 }] });
+  const r = mergeInto(base, { a: 2, b: 3, o: { y: 2 }, arr: [{ k: 1 }, { k: 2 }] });
   assert.deepEqual(base, { a: 1, b: 3, o: { x: 1, y: 2 }, arr: [{ k: 1 }, { k: 2 }] });
-  assert.deepEqual(added, ['b', 'o.y', 'arr[]']);
+  assert.deepEqual(r, { added: ['b', 'o.y', 'arr[]'], kept: [] });
+});
+
+test('mergeInto: an existing truthgate entry is left whole (no arg splicing)', () => {
+  const base = { mcpServers: { truthgate: { command: 'node', args: ['dist/cli.js', 'mcp'] } } };
+  const r = mergeInto(base, { mcpServers: { truthgate: { type: 'stdio', command: 'npx', args: ['-y', 'truthgate', 'mcp'] } } });
+  assert.deepEqual(base.mcpServers.truthgate, { command: 'node', args: ['dist/cli.js', 'mcp'] });
+  assert.deepEqual(r, { added: [], kept: ['mcpServers.truthgate'] });
+  assert.deepEqual(mergeInto({ truthgate: { a: 1 } }, { truthgate: { a: 1 } }), { added: [], kept: [] });
 });
 
 test('upsertBlock: append, replace, shebang, hash markers, CRLF', () => {
@@ -53,11 +61,41 @@ test('applyChanges: invalid JSON is skipped, not clobbered', async () => {
   const root = await tmp();
   await writeFile(join(root, 's.json'), '{ // comment\n}');
   const [line] = await applyChanges(root, [{ path: 's.json', action: 'merge', content: '{"a":1}' }], false);
-  assert.match(line!, /^skip s\.json \(cannot parse/);
+  assert.match(line!, /^skip s\.json \(.*merge by hand/);
   assert.equal(await readFile(join(root, 's.json'), 'utf8'), '{ // comment\n}');
 });
 
-test('applyChanges: TOML merge appends (keeping comments) or rewrites on overlap', async () => {
+test('applyChanges: JSON with a user truthgate entry keeps it and says merge by hand', async () => {
+  const root = await tmp();
+  const user = { mcpServers: { truthgate: { command: 'node', args: ['x'] } } };
+  await writeFile(join(root, '.mcp.json'), JSON.stringify(user));
+  const [line] = await applyChanges(root, [{ path: '.mcp.json', action: 'merge', content: JSON.stringify({ mcpServers: { truthgate: { command: 'npx' } } }) }], false);
+  assert.match(line!, /^skip \.mcp\.json \(kept your existing mcpServers\.truthgate; merge by hand/);
+  assert.deepEqual(JSON.parse(await readFile(join(root, '.mcp.json'), 'utf8')), user);
+});
+
+test('applyChanges: TOML with comments and an existing [mcp_servers.truthgate] is never rewritten', async () => {
+  const root = await tmp();
+  await mkdir(join(root, '.codex'));
+  const f = join(root, '.codex/config.toml');
+  const user = '# keep me\nmodel = "x"\n\n[mcp_servers.truthgate]\ncommand = "npx" # mine\n';
+  await writeFile(f, user);
+  const change = { path: '.codex/config.toml', action: 'merge' as const, content: '[mcp_servers.truthgate]\ncommand = "cmd"\nargs = ["/c", "npx", "-y", "truthgate", "mcp"]\n' };
+  const [line] = await applyChanges(root, [change], false);
+  assert.match(line!, /^skip \.codex\/config\.toml \(kept your existing mcp_servers\.truthgate; merge by hand/);
+  assert.equal(await readFile(f, 'utf8'), user);
+});
+
+test('applyChanges: TOML overlapping tables are skipped, not re-stringified', async () => {
+  const root = await tmp();
+  const user = '# c\n[a]\nx = 1\n';
+  await writeFile(join(root, 'c.toml'), user);
+  const [line] = await applyChanges(root, [{ path: 'c.toml', action: 'merge', content: '[a]\ny = 2\n' }], false);
+  assert.match(line!, /^skip c\.toml \(our tables overlap existing ones; merge by hand/);
+  assert.equal(await readFile(join(root, 'c.toml'), 'utf8'), user);
+});
+
+test('applyChanges: TOML merge appends, keeping comments', async () => {
   const root = await tmp();
   await mkdir(join(root, '.codex'));
   const f = join(root, '.codex/config.toml');
@@ -68,12 +106,6 @@ test('applyChanges: TOML merge appends (keeping comments) or rewrites on overlap
   assert.match(text, /# my comment/);
   assert.match(text, /\[mcp_servers\.truthgate\]/);
   assert.deepEqual(await applyChanges(root, [change], false), ['skip .codex/config.toml (up to date)']);
-
-  await writeFile(f, '[mcp_servers.truthgate]\ncommand = "mine"\n');
-  await applyChanges(root, [change], false);
-  const rewritten = await readFile(f, 'utf8');
-  assert.match(rewritten, /command = "mine"/);
-  assert.match(rewritten, /args = \[/);
 });
 
 test('applyChanges: append-block files and shebang files are written', async () => {

@@ -66,6 +66,7 @@ test('stop hooks and MCP configs are wired with the truthgate commands', async (
 
 test('instruct-only agents: manual MCP steps and own rules files', async () => {
   assert.match(installers.windsurf.manualSteps![0]!, /mcp_config\.json[\s\S]*"truthgate"/);
+  if (process.platform === 'win32') assert.match(installers.windsurf.manualSteps![0]!, /%APPDATA%\\devin\\mcp_config\.json/);
   assert.match(installers.cline.manualSteps![0]!, /"truthgate"/);
   const root = await tmp();
   await applyChanges(root, await installers.kiro.plan(root), false);
@@ -85,7 +86,7 @@ test('hookOutput: block / capped / pass per agent', () => {
     assert.equal(out(id, false).stdout, '');
     assert.notEqual(JSON.parse(out(id, true, true).stdout || '{}').decision, 'block');
   }
-  assert.match(JSON.parse(out('claude', true, true).stdout).systemMessage, /STILL FAILING/);
+  assert.match(JSON.parse(out('claude', true, true).stdout).systemMessage, /STOP ALLOWED WITHOUT A PASSING VERIFY/);
   assert.equal(JSON.parse(out('gemini', true).stdout).decision, 'deny');
   assert.equal(JSON.parse(out('gemini', false).stdout).decision, 'allow');
   assert.equal(JSON.parse(out('gemini', true, true).stdout).decision, 'allow');

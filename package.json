@@ -9,8 +9,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test \"test/**/*.test.ts\"",
-    "e2e": "node --test \"test/e2e/**/*.e2e.ts\"",
+    "test": "node --import ./test/setup.ts --test \"test/**/*.test.ts\"",
+    "e2e": "node --import ./test/setup.ts --test \"test/e2e/**/*.e2e.ts\"",
     "prepack": "npm run build"
   },
   "dependencies": {

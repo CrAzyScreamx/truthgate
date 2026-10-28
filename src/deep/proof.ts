@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Config, Spec, Verdict, VerdictKind } from '../contract.ts';
+import { exec } from '../runner/proc.ts';
 import type { RunSpecFn } from './index.ts';
 
 const ROCQ_BANNED = /\b(Admitted|admit|Axioms?|Parameters?)\b/;
@@ -17,24 +18,33 @@ interface Exec {
   timedOut?: true;
 }
 
-function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, deadline: number): Promise<Exec> {
-  const timeout = deadline - Date.now();
-  if (timeout <= 0) return Promise.resolve({ code: -1, out: '', err: '', timedOut: true });
-  return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, env, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (e, out, err) => {
-      const x = e as (NodeJS.ErrnoException & { killed?: boolean }) | null;
-      if (x?.code === 'ENOENT') resolve({ code: -1, out, err, missing: true });
-      else if (x?.killed) resolve({ code: -1, out, err, timedOut: true });
-      else resolve({ code: x ? (typeof x.code === 'number' ? x.code : 1) : 0, out, err });
-    });
-  });
+const pathKey = (env: NodeJS.ProcessEnv) => Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+
+/** Absolute path of `tool` on env's PATH, or null when it isn't installed. */
+export function findTool(tool: string, env: NodeJS.ProcessEnv): string | null {
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
+  for (const d of (env[pathKey(env)] ?? '').split(path.delimiter))
+    for (const e of exts) if (d && existsSync(path.join(d, tool + e))) return path.join(d, tool + e);
+  return null;
+}
+
+/** `exec` (kills the process tree on timeout) with a resolved exe, so "not installed" is unambiguous. */
+export async function run(tool: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, deadline: number): Promise<Exec> {
+  const timeoutMs = deadline - Date.now();
+  if (timeoutMs <= 0) return { code: -1, out: '', err: '', timedOut: true };
+  const exe = findTool(tool, env);
+  if (!exe) return { code: -1, out: '', err: '', missing: true };
+  const r = await exec([exe, ...args], { cwd, env, timeoutMs });
+  if (r.error?.startsWith('timed out')) return { code: -1, out: r.stdout, err: r.stderr, timedOut: true };
+  return { code: r.code ?? -1, out: r.stdout, err: r.error ? `${r.stderr}
+${r.error}` : r.stderr };
 }
 
 /** process.env with the prover's directory (config may give the dir or the exe) prepended to PATH. */
 export function withProverPath(prover: string | undefined): NodeJS.ProcessEnv {
   if (!prover) return process.env;
   const dir = path.resolve(/^(rocq|dafny)(\.exe)?$/i.test(path.basename(prover)) ? path.dirname(prover) : prover);
-  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const key = pathKey(process.env);
   const old = process.env[key];
   return { ...process.env, [key]: old ? dir + path.delimiter + old : dir };
 }
@@ -114,7 +124,7 @@ async function auditRocq(file: string, theorem: string, config: Config, deadline
     const assumptions = printed.out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^Axioms:$/.test(l));
     return { ok: false, reason: `assumptions: ${assumptions.join('; ')}` };
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 });
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
   }
 }
 

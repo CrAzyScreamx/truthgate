@@ -4,13 +4,15 @@ import { join } from 'node:path';
 import type { Config, DeepReport, LanguageAdapter, RunOptions, RunReport, Spec, Verdict } from '../contract.ts';
 import { loadConfig } from './config.ts';
 import { loadSpecs, targetFile } from './spec.ts';
-import { changedFiles, NotGitError } from './diff.ts';
+import { changedFiles, commitOf, isDirty, NotGitError } from './diff.ts';
+import { readBaseline, writeBaseline } from './baseline.ts';
 import { detectTamper } from './tamper.ts';
 import { approvalStates, checkApprovals } from './approve.ts';
 import { weakSpecCheck } from './weak.ts';
 import { matchesAny } from './glob.ts';
 
 export const LAST_RUN_FILE = '.truthgate/last-run.json';
+const OWN_FILES = [LAST_RUN_FILE, '.truthgate/state.json'];
 
 /** Injection points for tests; defaults are the real modules, imported lazily. */
 export interface VerifyDeps {
@@ -30,16 +32,24 @@ export async function verify(
   const adapters = deps.adapters ?? (await import('../lang/index.ts')).adapters;
   const warnings: string[] = [];
 
+  // Everything compares against the user-local baseline commit, not the agent-movable HEAD.
   let changed: string[] = [];
   let git = true;
+  let base = '';
+  let recorded = false;
   try {
-    changed = await changedFiles(root);
+    const b = await readBaseline(root);
+    base = b.commit;
+    recorded = b.source !== 'head';
+    changed = await changedFiles(root, base);
+    if (b.source === 'head')
+      warnings.push('no truthgate baseline recorded on this machine: comparing against HEAD, which an agent can move by committing; the user runs `npx truthgate approve` to record one');
   } catch (e) {
     if (!(e instanceof NotGitError)) throw e;
     git = false;
     warnings.push('not a git repository: running every spec; tamper checks skipped');
   }
-  const tamper = git ? [...(await detectTamper(root, changed, adapters)), ...(await checkApprovals(root, specs))] : [];
+  const tamper = git ? [...(await detectTamper(root, changed, adapters, base)), ...(await checkApprovals(root, specs, base))] : [];
 
   const all = opts.all || !git;
   const selected = all ? specs : specs.filter((s) => changed.includes(targetFile(s)) || changed.includes(s.file));
@@ -50,7 +60,7 @@ export async function verify(
     if (targets.has(f) || f.startsWith('.truthgate/') || !matchesAny(f, config.sourceGlobs) || matchesAny(f, testGlobs)) continue;
     if (existsSync(join(root, f))) warnings.push(`${f} changed but has no spec: UNVERIFIED (no spec)`);
   }
-  const states = await approvalStates(root, selected);
+  const states = await approvalStates(root, selected, git ? base : undefined);
   for (const s of selected) if (states[s.id] !== 'approved') warnings.push(`spec ${s.id} is not approved yet; ask the user to run \`npx truthgate approve\``);
 
   const verdicts: Verdict[] = [];
@@ -80,10 +90,16 @@ export async function verify(
     tamper,
     warnings,
     changedFiles: changed,
-    blocking: tamper.length > 0 || [...verdicts, ...(deep?.proofs ?? [])].some((v) => v.kind === 'FALSIFIED'),
+    blocking: tamper.length > 0 || verdicts.some((v) => v.kind === 'FALSIFIED'),
     durationMs: Date.now() - start,
     ...(deep && { deep }),
   };
+  // A fully clean run on a clean tree moves the baseline forward. UNVERIFIED also holds it back, so
+  // committing code whose check could not run never makes that code part of the baseline.
+  if (git && !report.blocking && !verdicts.some((v) => v.kind === 'UNVERIFIED') && !(await isDirty(root, OWN_FILES))) {
+    const head = await commitOf(root, 'HEAD');
+    if (head && (head !== base || !recorded)) await writeBaseline(root, { commit: head, source: 'clean-run' });
+  }
   await mkdir(join(root, '.truthgate'), { recursive: true });
   await writeFile(join(root, LAST_RUN_FILE), JSON.stringify(report, null, 2) + '\n');
   return report;

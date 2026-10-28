@@ -7,6 +7,13 @@ Commands written into configs:
 - **MCP:** `npx -y truthgate mcp`. On Windows this becomes `cmd /c npx -y truthgate mcp`, because agents spawn MCP servers without a shell and `npx` is `npx.cmd`. The written config is per-machine, so teammates on another OS rerun `init`.
 - **Stop hook:** `npx -y truthgate hook --agent <id>`.
 
+Merge rules:
+- **JSON:** objects are deep-merged, and missing array items are appended.
+- **An existing `truthgate` entry is yours.** It is never merged into: our args are not spliced into your command. `init` prints "kept your existing … merge by hand".
+- **TOML:** only ever appended to, so comments and layout survive. If our tables would overlap yours, `init` skips the file and prints the block to merge by hand.
+
+**Gemini CLI → Antigravity CLI:** since 2026-06-18, geminicli.com carries a banner saying Gemini CLI has been replaced by Antigravity CLI. The `gemini` installer targets the documented `.gemini/` layout. Whether Antigravity CLI reads the same paths is **UNCONFIRMED**.
+
 ## Matrix
 | Agent | Skills | MCP | Rules | Commands | Stop hook |
 |---|---|---|---|---|---|
@@ -26,10 +33,11 @@ The skills are copied from `assets/skills/` (`truthgate-spec`, `truthgate-shim` 
 ## Stop-hook behaviour
 `truthgate hook --agent <id>` reads the agent's JSON payload on stdin and ignores fields it doesn't know. It runs `verify` and applies the loop cap (`loopCap`, default 3):
 - On a blocking report (FALSIFIED or tampering), it blocks while `consecutiveBlocks < loopCap`.
-- Once the cap is reached, it allows the stop, prints a loud "STILL FAILING" summary to stderr (and to the agent where it has a message channel), and resets the count.
+- A spec or config error blocks too, with the error text as the reason, and counts toward the cap. This covers an invalid `.truthgate/specs/*.yaml` and a broken `.truthgate/config.json`. Breaking a spec is not a way out.
+- Once the cap is reached, it allows the stop, prints a loud "STOP ALLOWED WITHOUT A PASSING VERIFY" summary to stderr (and to the agent where it has a message channel), and resets the count.
 - A passing run resets the count to 0.
 - When the payload says the stop is *not* a hook-forced continuation (`stop_hook_active: false`, Cursor `loop_count: 0`), the count restarts at 0.
-- On any internal error, it allows the stop and prints the error to stderr. It never breaks the session.
+- Only an unexpected internal crash allows the stop outright. It is reported the same loud way ("truthgate internal error, stop allowed"), so the session never breaks silently.
 
 | Agent | Payload used | Block | Capped / allow | Shell on Windows | Timeout set |
 |---|---|---|---|---|---|
@@ -58,7 +66,7 @@ These get skills, MCP (where a project file exists) and rules that tell the agen
 - **Kiro:** has a `Stop` hook (`.kiro/hooks/*.json`), but the docs conflict on how to block it (exit 1 vs exit 0 with `{"decision":"block"}`), so it is **UNCONFIRMED** and not installed. The prompt-file format (`.kiro/prompts/`) is **UNCONFIRMED**, so no commands are installed.
 
 ## Pre-commit hook
-`init` offers it as opt-in. It writes a `# truthgate:begin … # truthgate:end` block containing `npx -y truthgate verify || exit 1`, with LF line endings, into the directory from `git rev-parse --git-path hooks`. That respects `core.hooksPath` and worktrees. An existing hook is kept, and the block goes right after its shebang so a trailing `exit` can't skip it.
+`init` offers it as opt-in. It writes a `# truthgate:begin … # truthgate:end` block containing `npx -y truthgate verify || exit 1`, with LF line endings, into the directory from `git rev-parse --git-path hooks`. That respects `core.hooksPath` and worktrees. An existing hook is kept. When it is sh-family (sh, bash, zsh or dash) or has no shebang, the block goes right after its shebang so a trailing `exit` can't skip it. A hook in another language, such as a Python or Node shebang, is left untouched, and `init` prints the line to add by hand.
 
 ## Sources
 - Claude: code.claude.com/docs/en/skills, /mcp, /memory, /hooks

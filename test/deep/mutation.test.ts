@@ -100,7 +100,7 @@ test('mutation: temp copy only, caught/total/survivors, cleanup', async () => {
   const before = fs.readFileSync(path.join(dir, 'src/m.ts'), 'utf8');
   const roots: string[] = [];
   const deps: Deps = {
-    lineComment: () => '//',
+    lineComment: () => '//', baseCommit: async () => 'HEAD',
     runSpec: async (s, root, opts) => {
       roots.push(root);
       assert.equal(opts.runs, 25);
@@ -134,7 +134,7 @@ test('mutation: temp copy only, caught/total/survivors, cleanup', async () => {
 test('mutation: mutants nothing could run are not counted', async () => {
   const dir = repo();
   const deps: Deps = {
-    lineComment: () => '//',
+    lineComment: () => '//', baseCommit: async () => 'HEAD',
     runSpec: async (s) => [{ specId: s.id, kind: 'UNVERIFIED', detail: 'shim error', durationMs: 0 }],
   };
   try {
@@ -147,7 +147,7 @@ test('mutation: mutants nothing could run are not counted', async () => {
 
 test('mutation: skipped when no changed file is targeted; untracked file counts as all changed', async () => {
   const dir = repo();
-  const deps: Deps = { lineComment: () => '//', runSpec: async (s) => [{ specId: s.id, kind: 'FALSIFIED', detail: '', durationMs: 0 }] };
+  const deps: Deps = { lineComment: () => '//', baseCommit: async () => 'HEAD', runSpec: async (s) => [{ specId: s.id, kind: 'FALSIFIED', detail: '', durationMs: 0 }] };
   try {
     assert.equal((await runDeep(dir, [spec], ['other.ts'], config, deps)).mutation, undefined);
     fs.writeFileSync(path.join(dir, 'src', 'n.ts'), 'export const n = (a) => a + 1;\n');
@@ -161,11 +161,32 @@ test('mutation: skipped when no changed file is targeted; untracked file counts 
 test('mutation: zero budget runs nothing', async () => {
   const dir = repo();
   let calls = 0;
-  const deps: Deps = { lineComment: () => '//', runSpec: async () => (calls++, []) };
+  const deps: Deps = { lineComment: () => '//', baseCommit: async () => 'HEAD', runSpec: async () => (calls++, []) };
   try {
     const mu = (await runDeep(dir, [spec], ['src/m.ts'], { ...config, deepBudgetSeconds: 0 }, deps)).mutation!;
     assert.equal(mu.total, 0);
     assert.equal(calls, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mutation: changed lines are measured against the baseline commit, not HEAD', async () => {
+  const dir = repo();
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' }).trim();
+  const base = git('rev-parse', 'HEAD');
+  git('commit', '-qam', 'agent moved HEAD'); // the agent commits its change; the baseline stays put
+  const lines: number[] = [];
+  const deps: Deps = {
+    lineComment: () => '//',
+    baseCommit: async (root) => (assert.equal(root, dir), base),
+    runSpec: async (s) => [{ specId: s.id, kind: 'TESTED', detail: '', durationMs: 0 }],
+  };
+  try {
+    const mu = (await runDeep(dir, [spec], ['src/m.ts'], config, deps)).mutation!;
+    for (const sv of mu.survivors) lines.push(sv.line);
+    assert.equal(mu.total, 5);
+    assert.deepEqual([...new Set(lines)], [3]); // unchanged `const k = 7` (line 6) is never mutated
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -104,7 +104,7 @@ test('verify end to end on a js target: exit 1 on FALSIFIED, --json, shim for js
   assert.ok(report.verdicts.some((v: { specId: string; kind: string }) => v.specId === 'bad' && v.kind === 'FALSIFIED'));
   assert.ok(existsSync(join(root, '.truthgate/last-run.json')));
 
-  assert.match(cli(root, 'shim', 'abs').out, /no shim needed/);
+  assert.equal(cli(root, 'shim', 'abs').code, 0);
   await put(root, '.truthgate/specs/py.yaml', 'id: py\ntarget: src/p.py::f\nlang: python\ninputs: { x: "int[0,1]" }\nensures: [{ name: p, expr: "out == x" }]\n');
   r = cli(root, 'shim', 'py');
   assert.equal(r.code, 0, r.err);
@@ -128,4 +128,18 @@ test('hook reads stdin and returns the installer output', async () => {
   const root = await repo({ 'README.md': 'x' });
   const r = spawnSync(process.execPath, [CLI, 'hook', '--agent', 'claude'], { cwd: root, encoding: 'utf8', input: '{"stop_hook_active": false}' });
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('init without a TTY or --yes in a Python repo prints the Hypothesis hint', async () => {
+  const root = await repo({ 'a.py': 'x = 1\n' });
+  const r = cli(root, 'init', '--agent', 'claude', '--dry-run');
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /Python found: rerun with --yes to add Hypothesis/);
+});
+
+test('a config value below 1 exits 2', async () => {
+  const root = await repo({ '.truthgate/config.json': '{"budgetSeconds": 0}' });
+  const r = cli(root, 'verify');
+  assert.equal(r.code, 2);
+  assert.match(r.err, /config\.json: budgetSeconds: must be at least 1/);
 });

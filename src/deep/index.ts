@@ -8,14 +8,21 @@ export type RunSpecFn = (spec: Spec, root: string, opts: RunOptions) => Promise<
 export interface Deps {
   runSpec: RunSpecFn;
   lineComment(lang: Lang): string;
+  /** Commit that "changed lines" are measured against (the approval/clean-run baseline, not HEAD). */
+  baseCommit(root: string): Promise<string>;
 }
 
 async function defaultDeps(): Promise<Deps> {
-  const [{ runSpec }, { getAdapter }] = await Promise.all([
+  const [{ runSpec }, { getAdapter }, { readBaseline }] = await Promise.all([
     import('../runner/index.ts'),
     import('../lang/index.ts'),
+    import('../core/baseline.ts'),
   ]);
-  return { runSpec, lineComment: (lang) => getAdapter(lang).lineComment };
+  return {
+    runSpec,
+    lineComment: (lang) => getAdapter(lang).lineComment,
+    baseCommit: async (root) => (await readBaseline(root)).commit,
+  };
 }
 
 export async function runDeep(

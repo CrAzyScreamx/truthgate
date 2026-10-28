@@ -2,24 +2,30 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join, extname, basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { parse as parseToml } from 'smol-toml';
 import type { FileChange } from '../contract.ts';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Deep-merge `add` into `base` in place. Objects recurse, arrays append missing items, existing
- *  scalars win (never clobber a user value). Returns the dotted paths that were added. */
-export function mergeInto(base: Obj, add: Obj, prefix = ''): string[] {
+ *  scalars win (never clobber a user value). An existing `truthgate` entry is the user's and is left
+ *  whole (merging into it would splice our args into their command); it is reported in `kept`. */
+export function mergeInto(base: Obj, add: Obj, prefix = ''): { added: string[]; kept: string[] } {
   const added: string[] = [];
+  const kept: string[] = [];
   for (const [k, v] of Object.entries(add)) {
     const path = prefix ? `${prefix}.${k}` : k;
     const cur = base[k];
     if (cur === undefined) {
       base[k] = v;
       added.push(path);
+    } else if (k === 'truthgate') {
+      if (!isDeepStrictEqual(cur, v)) kept.push(path);
     } else if (isObj(cur) && isObj(v)) {
-      added.push(...mergeInto(cur, v, path));
+      const r = mergeInto(cur, v, path);
+      added.push(...r.added);
+      kept.push(...r.kept);
     } else if (Array.isArray(cur) && Array.isArray(v)) {
       const seen = new Set(cur.map((x) => JSON.stringify(x)));
       for (const item of v) {
@@ -30,7 +36,7 @@ export function mergeInto(base: Obj, add: Obj, prefix = ''): string[] {
       }
     }
   }
-  return added;
+  return { added, kept };
 }
 
 const hashComment = new Set(['.toml', '.sh', '.yaml', '.yml', '']);
@@ -56,23 +62,25 @@ export function upsertBlock(existing: string, content: string, file: string): st
   return existing.replace(/(\r?\n)*$/, '') + eol + eol + block + eol;
 }
 
-function mergeText(path: string, existing: string | undefined, content: string): { text: string; added: string[] } {
+function mergeText(path: string, existing: string | undefined, content: string): { text: string; added: string[]; kept: string[] } {
   const toml = extname(path) === '.toml';
   const parse = (s: string): Obj => (toml ? (parseToml(s) as Obj) : (JSON.parse(s) as Obj));
   const base = existing?.trim() ? parse(existing) : {};
   if (!isObj(base)) throw new Error('top level is not an object');
-  const added = mergeInto(base, parse(content));
-  if (toml && existing?.trim()) {
-    // Appending keeps the user's comments and layout; valid only when it parses to the merged result.
-    const appended = existing.replace(/(\r?\n)*$/, '') + '\n\n' + content.trim() + '\n';
-    try {
-      if (isDeepStrictEqual(parse(appended), base)) return { text: appended, added };
-    } catch {
-      // overlapping tables: fall through to a full rewrite
-    }
+  const r = mergeInto(base, parse(content));
+  if (!toml) return { text: JSON.stringify(base, null, 2) + '\n', ...r };
+  if (!existing?.trim()) return { text: content.trim() + '\n', ...r };
+  // TOML is only ever appended to (re-stringifying would drop the user's comments and layout), and
+  // only when the result parses to exactly the merged document, i.e. our tables don't overlap theirs.
+  const appended = existing.replace(/(\r?\n)*$/, '') + '\n\n' + content.trim() + '\n';
+  let ok = false;
+  try {
+    ok = isDeepStrictEqual(parse(appended), base);
+  } catch {
+    // overlapping tables
   }
-  const text = toml ? stringifyToml(base) + '\n' : JSON.stringify(base, null, 2) + '\n';
-  return { text, added };
+  if (r.added.length && !ok) throw new Error('our tables overlap existing ones');
+  return { text: appended, ...r };
 }
 
 async function readOr(file: string): Promise<string | undefined> {
@@ -96,7 +104,8 @@ export async function applyChanges(root: string, changes: FileChange[], dryRun: 
     if (c.action === 'create') {
       if (existing !== undefined) {
         const same = existing.replace(/\r\n/g, '\n') === c.content.replace(/\r\n/g, '\n');
-        lines.push(same ? `skip ${c.path} (up to date)` : `skip ${c.path} (exists and differs; not overwritten)`);
+        const note = c.note && !same ? ` - ${c.note}` : '';
+        lines.push(same ? `skip ${c.path} (up to date)` : `skip ${c.path} (exists and differs; not overwritten)${note}`);
         continue;
       }
       next = c.content;
@@ -106,15 +115,17 @@ export async function applyChanges(root: string, changes: FileChange[], dryRun: 
       try {
         r = mergeText(c.path, existing, c.content);
       } catch (e) {
-        lines.push(`skip ${c.path} (cannot parse: ${(e as Error).message}; merge by hand:\n${c.content.trim()})`);
+        lines.push(`skip ${c.path} (${(e as Error).message}; merge by hand:\n${c.content.trim()})`);
         continue;
       }
+      const kept = r.kept.length ? `kept your existing ${r.kept.join(', ')}; merge by hand if needed:\n${c.content.trim()}` : '';
       if (r.added.length === 0) {
-        lines.push(`skip ${c.path} (up to date)`);
+        lines.push(kept ? `skip ${c.path} (${kept})` : `skip ${c.path} (up to date)`);
         continue;
       }
       next = r.text;
       line = `${verb(existing === undefined ? 'create' : 'merge')} ${c.path} (+${[...new Set(r.added)].join(', +')})`;
+      if (kept) line += ` (${kept})`;
     } else {
       next = upsertBlock(existing ?? '', c.content, c.path);
       if (next === existing) {

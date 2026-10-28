@@ -1,4 +1,4 @@
-// truthgate shim (Rust) for spec "stock.seq". Save as examples/truthgate_stock_seq.rs; truthgate runs `cargo run -q --example truthgate_stock_seq`.
+// truthgate shim (Rust) for spec "stock.seq". Save as examples/truthgate_stock_seq.rs; truthgate builds it with `cargo build --example truthgate_stock_seq` and runs the binary.
 // Needs a library crate (src/lib.rs) with the target and its module `pub`. No dependencies: a tiny JSON reader/writer is included.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
 // Type mapping: int -> i64, decimal -> f64, str -> String, bool -> bool, list<T> -> Vec<T>, record/oneof -> J (raw JSON).

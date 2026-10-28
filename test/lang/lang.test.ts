@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import type { Lang, Spec } from '../../src/contract.ts';
+import { globToRegExp } from '../../src/core/glob.ts';
 import { argOrder, safeId, shimCommand } from '../../src/lang/common.ts';
 import { goTemplate } from '../../src/lang/go/adapter.ts';
 import { adapters, getAdapter } from '../../src/lang/index.ts';
@@ -65,7 +66,30 @@ test('skip markers and assert patterns match the plan list', () => {
   for (const a of adapters) assert.ok(a.lineComment && a.testFileGlobs.length);
 });
 
-test('generic shim templates (python, java, csharp) ship with the package', () => {
+test('round-1 skip forms are caught (R1-09b)', () => {
+  const hit = (l: Lang, line: string) => getAdapter(l).skipMarkers.some((r) => r.test(line));
+  for (const line of ['pytestmark = pytest.mark.skip(reason="x")', 'pytestmark = [pytest.mark.xfail]', '        self.skipTest("later")', 'pytest.importorskip("numpy")'])
+    assert.ok(hit('python', line), line);
+  for (const line of ["test.only('x', () => {})", "it.only('x')", "describe.only('x')", "test.skipIf(true)('x', () => {})", "it.todo('x')", "test('x', { only: true }, () => {})"])
+    assert.ok(hit('ts', line), line);
+  for (const line of ['@DisabledIf("x")', '@DisabledOnOs(OS.WINDOWS)', 'assumeTrue(false);', 'Assumptions.assumeTrue(false, "x");', 'assumeFalse(true);'])
+    assert.ok(hit('java', line), line);
+  for (const line of ['[Theory(DisplayName = "x", Skip = "y")]', '[Test, Ignore("x")]', '[Explicit]', 'Assert.Ignore("x");', 'Skip.If(true);'])
+    assert.ok(hit('csharp', line), line);
+  assert.ok(hit('go', 'b.Skip("slow")'));
+  assert.ok(hit('rust', '#[ignore = "slow"]'));
+  assert.ok(hit('rust', '#[cfg_attr(windows, ignore)]'));
+  assert.ok(!hit('ts', "it('only runs once', () => {})"));
+  assert.ok(!hit('python', 'def test_skip_logic():'));
+});
+
+test('rust test globs include src/**/*.rs (inline #[cfg(test)] modules, F3)', () => {
+  const globs = getAdapter('rust').testFileGlobs.map(globToRegExp);
+  for (const f of ['src/lib.rs', 'src/a/b.rs', 'crates/x/src/lib.rs', 'tests/it.rs']) assert.ok(globs.some((g) => g.test(f)), f);
+});
+
+test('generic shim templates (python, ts, js, java, csharp) ship with the package', () => {
+  for (const l of ['ts', 'js'] as Lang[]) assert.equal(getAdapter(l).shimTemplate(spec({ lang: l })).path, '');
   for (const l of ['python', 'java', 'csharp'] as Lang[]) {
     const t = getAdapter(l).shimTemplate(spec({ lang: l }));
     assert.match(t.path, /^\.truthgate\/shims\//);

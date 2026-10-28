@@ -1,7 +1,11 @@
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Baselines go to a throwaway store, never the user's ~/.truthgate (spawned CLIs inherit this).
+process.env.TRUTHGATE_HOME ??= mkdtempSync(join(tmpdir(), 'tg-home-'));
 
 export async function repo(files: Record<string, string> = {}, commit = true): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'tg-git-'));

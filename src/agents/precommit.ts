@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { FileChange } from '../contract.ts';
@@ -18,12 +18,17 @@ async function hooksDir(root: string): Promise<string> {
   }
 }
 
-/** Pre-commit hook change: our block goes into an existing hook (never clobbered), or a new sh file. */
+/** Shebang-less hooks run under git's sh, so only sh-family or shebang-less hooks can take our block. */
+const shHook = (text: string) => !text.startsWith('#!') || /^#!\S*\/(env\s+)?(sh|bash|zsh|dash)\b/.test(text);
+
+/** Pre-commit hook change: our block goes into an existing sh hook (never clobbered), or a new sh file.
+ *  A hook in another language yields a `create` that apply refuses, printing the manual step as its note. */
 export async function installPreCommit(root: string): Promise<FileChange> {
   const file = join(await hooksDir(root), 'pre-commit');
   const path = relative(root, file).replaceAll('\\', '/');
-  const exists = await access(file).then(() => true, () => false);
-  return exists
-    ? { path, action: 'append-block', content: VERIFY, note: 'pre-commit hook' }
-    : { path, action: 'create', content: upsertBlock('#!/bin/sh\n', VERIFY, 'pre-commit'), note: 'pre-commit hook' };
+  const fresh = upsertBlock('#!/bin/sh\n', VERIFY, 'pre-commit');
+  const existing = await readFile(file, 'utf8').catch(() => undefined);
+  if (existing === undefined) return { path, action: 'create', content: fresh, note: 'pre-commit hook' };
+  if (shHook(existing)) return { path, action: 'append-block', content: VERIFY, note: 'pre-commit hook' };
+  return { path, action: 'create', content: fresh, note: `existing hook is not sh: add \`${VERIFY}\` (or its equivalent) to it by hand` };
 }

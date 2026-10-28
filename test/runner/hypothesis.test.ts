@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import type { Spec } from '../../src/contract.ts';
 import { harness, runHypothesis, strategy } from '../../src/runner/hypothesis.ts';
@@ -44,4 +46,22 @@ test('runHypothesis: verdicts when Hypothesis is importable, else a setup reason
   const bad = await runHypothesis(spec('total_buggy'), root, opts);
   assert.ok(typeof bad !== 'string');
   assert.equal(bad[0]!.kind, 'FALSIFIED');
+});
+
+test('runHypothesis (when importable): TypeError -> crash, wrong-typed out -> FALSIFIED, Rejected/ValueError skipped', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'tg-hyp-test-'));
+  writeFileSync(
+    join(dir, 'h.py'),
+    'class Rejected(Exception):\n    pass\ndef typo(x):\n    return None + 1 if x > 6 else x * 2\ndef null_above(x):\n    return None if x > 6 else x * 2\ndef refuses(x):\n    if x > 8:\n        raise Rejected("no")\n    if x > 6:\n        raise ValueError("no")\n    return x * 2\n',
+  );
+  const s = (fn: string): Spec => ({ ...spec(fn), target: `h.py::${fn}`, inputs: { x: 'int[0,12]' }, ensures: [{ name: 'p', expr: 'out == x * 2 or out > x' }] });
+  const opts = { seed: 42, runs: 100, deadline: Date.now() + 60_000, config: { python: { native: true } } as never };
+  const typo = await runHypothesis(s('typo'), dir, opts);
+  if (typeof typo === 'string') return t.skip(`Hypothesis not importable: ${typo}`);
+  assert.equal(typo[0]!.kind, 'FALSIFIED');
+  assert.match(typo[0]!.detail, /TypeError/);
+  const nul = await runHypothesis(s('null_above'), dir, opts);
+  assert.ok(typeof nul !== 'string' && nul[0]!.kind === 'FALSIFIED' && /expression error/.test(nul[0]!.detail));
+  const ref = await runHypothesis(s('refuses'), dir, opts);
+  assert.ok(typeof ref !== 'string' && ref[0]!.kind === 'TESTED');
 });

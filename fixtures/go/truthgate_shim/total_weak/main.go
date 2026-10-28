@@ -1,5 +1,5 @@
 // truthgate shim (Go) for spec "total.weak". Save as truthgate_shim/total_weak/main.go (inside your module).
-// truthgate runs `go run ./truthgate_shim/total_weak` from the module root, one long-lived process per spec run.
+// truthgate builds it with `go build ./truthgate_shim/total_weak` from the module root and runs the binary, one long-lived process per spec run.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
 // Inputs are decoded with encoding/json into each parameter's type, positionally in spec order
 // (int -> any int type, decimal -> float64, str -> string, bool -> bool, list<T> -> []T, record -> struct or map).

@@ -5,7 +5,7 @@
 // function specs: a public static method by name (case-insensitive) and arity, on the class named like the file.
 // sequence specs: reset -> new T(); ops -> public instance methods (add -> Add); state -> State() if present, else the object.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
-// ArgumentException thrown by your code -> rejected; any other exception -> crash. A missing method exits (shim error).
+// ArgumentException, or an exception class named Rejected, thrown by your code -> rejected; any other exception -> crash. A missing method exits (shim error).
 // JSON limits: each input is deserialised by System.Text.Json into the parameter's type (int, long, double, decimal,
 // string, bool, List<T>, T[], records ...); outputs are serialised the same way (fields included). NaN/Infinity -> crash.
 using System.Reflection;
@@ -55,7 +55,7 @@ for (string? line; (line = Console.In.ReadLine()) != null;)
     {
         var user = e is TargetInvocationException;
         var c = user ? e.InnerException! : e;
-        reply = JsonSerializer.Serialize(new { error = $"{c.GetType().Name}: {c.Message}", kind = user && c is ArgumentException ? "rejected" : "crash" });
+        reply = JsonSerializer.Serialize(new { error = $"{c.GetType().Name}: {c.Message}", kind = user && (c is ArgumentException || c.GetType().Name == "Rejected") ? "rejected" : "crash" });
     }
     proto.WriteLine(reply);
     proto.Flush();

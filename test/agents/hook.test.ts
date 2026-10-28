@@ -28,7 +28,7 @@ test('blocks up to the loop cap, then allows with a capped message and resets', 
     assert.equal(state.consecutiveBlocks, n);
   }
   const capped = await runHookWith(claude, payload, '.', d);
-  assert.match(JSON.parse(capped.stdout).systemMessage, /STILL FAILING/);
+  assert.match(JSON.parse(capped.stdout).systemMessage, /STOP ALLOWED WITHOUT A PASSING VERIFY[\s\S]*FALSIFIED[\s\S]*loop cap reached: 3/);
   assert.equal(state.consecutiveBlocks, 0);
   assert.equal(decision((await runHookWith(claude, payload, '.', d)).stdout), 'block');
 });
@@ -49,11 +49,38 @@ test('a fresh turn (stop_hook_active false / loop_count 0) starts a new chain', 
   assert.match(JSON.parse(r.stdout).followup_message, /FALSIFIED/);
 });
 
-test('bad stdin is tolerated; internal errors allow the stop', async () => {
+test('bad stdin is tolerated; internal crashes allow the stop but say so', async () => {
   const { d } = deps([true]);
   assert.equal(decision((await runHookWith(claude, 'not json', '.', d)).stdout), 'block');
   const broken: HookDeps = { ...d, verify: async () => { throw new Error('boom'); } };
-  assert.deepEqual(await runHookWith(claude, '{}', '.', broken), { stdout: '', exitCode: 0 });
+  const r = await runHookWith(claude, '{}', '.', broken);
+  assert.equal(r.exitCode, 0);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.decision, undefined);
+  assert.match(out.systemMessage, /internal error, stop allowed: boom/);
+});
+
+test('a spec error blocks with its text and counts toward the cap', async () => {
+  const { d, state } = deps([]);
+  const specErr = Object.assign(new Error('.truthgate/specs/zz.yaml: bogus: unknown field'), { name: 'SpecError' });
+  const bad: HookDeps = { ...d, verify: async () => { throw specErr; } };
+  const p = '{"stop_hook_active":true}';
+  for (let n = 1; n <= 3; n++) {
+    const out = JSON.parse((await runHookWith(claude, p, '.', bad)).stdout);
+    assert.equal(out.decision, 'block');
+    assert.match(out.reason, /could not run: \.truthgate\/specs\/zz\.yaml: bogus: unknown field/);
+    assert.equal(state.consecutiveBlocks, n);
+  }
+  assert.match(JSON.parse((await runHookWith(claude, p, '.', bad)).stdout).systemMessage, /STOP ALLOWED/);
+});
+
+test('a config error blocks (default loop cap applies)', async () => {
+  const { d, state } = deps([]);
+  const bad: HookDeps = { ...d, loadConfig: async () => { throw new Error('.truthgate/config.json: loopCap has the wrong type'); } };
+  const out = JSON.parse((await runHookWith(installers.codex, '{}', '.', bad)).stdout);
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, /config\.json: loopCap/);
+  assert.equal(state.consecutiveBlocks, 1);
 });
 
 test('stray console.log during verify does not reach the returned stdout', async () => {

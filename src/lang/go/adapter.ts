@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { LanguageAdapter, Spec } from '../../contract.ts';
 import { probe } from '../../runner/proc.ts';
 import { openShim } from '../../runner/shim.ts';
-import { missingShim, safeId, shimCommand, splitTarget } from '../common.ts';
+import { buildThenRun, missingShim, safeId, shimCommand, splitTarget } from '../common.ts';
 
 const posix = (p: string) => p.split('\\').join('/');
 
@@ -32,7 +34,7 @@ export function goTemplate(spec: Spec, root: string): { path: string; source: st
   return {
     path,
     source: `// truthgate shim (Go) for spec "${spec.id}". Save as ${path} (inside your module).
-// truthgate runs \`go run ./${rel}\` from the module root, one long-lived process per spec run.
+// truthgate builds it with \`go build ./${rel}\` from the module root and runs the binary, one long-lived process per spec run.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
 // Inputs are decoded with encoding/json into each parameter's type, positionally in spec order
 // (int -> any int type, decimal -> float64, str -> string, bool -> bool, list<T> -> []T, record -> struct or map).
@@ -192,11 +194,13 @@ export const goAdapter: LanguageAdapter = {
       return openShim(command, cwd);
     }
     if (!existsSync(join(root, path))) throw missingShim(spec, path);
-    return openShim(['go', 'run', `./${rel}`], mod);
+    const tmp = await mkdtemp(join(tmpdir(), 'truthgate-go-'));
+    const bin = join(tmp, process.platform === 'win32' ? 'shim.exe' : 'shim');
+    return buildThenRun(['go', 'build', '-o', bin, `./${rel}`], mod, () => [bin], { tmp, what: 'go build' });
   },
   shimTemplate: (spec: Spec, root = process.cwd()) => goTemplate(spec, root),
   testFileGlobs: ['**/*_test.go'],
-  skipMarkers: [/\bt\.Skip(f|Now)?\s*\(/],
+  skipMarkers: [/\b[tbf]\.Skip(f|Now)?\s*\(/],
   assertPatterns: [/\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(/, /\b(assert|require)\.\w+\s*\(/],
   lineComment: '//',
 };

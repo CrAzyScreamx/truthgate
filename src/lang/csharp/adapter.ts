@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { LanguageAdapter } from '../../contract.ts';
 import { exec, probe } from '../../runner/proc.ts';
 import { openShim } from '../../runner/shim.ts';
-import { bundledTemplate, genericShim, SetupError, shimCommand, splitTarget } from '../common.ts';
+import { buildThenRun, bundledTemplate, genericShim, SetupError, shimCommand, splitTarget } from '../common.ts';
 
 const SAVED = '.truthgate/shims/TruthgateShim.cs';
 
@@ -57,16 +57,12 @@ export const csharpAdapter: LanguageAdapter = {
     await mkdir(dir, { recursive: true });
     if (!existsSync(proj) || (await readFile(proj, 'utf8')) !== xml) await writeFile(proj, xml);
     const out = join(dir, 'out');
-    const r = await exec(['dotnet', 'build', proj, '-o', out, '-nologo', '-v', 'q', '-clp:ErrorsOnly'], { env, timeoutMs: 300_000 });
-    if (r.code !== 0) {
-      const errs = (r.error ?? r.stdout + r.stderr).split('\n').filter((l) => /error/i.test(l)).slice(0, 3).join(' | ');
-      throw new SetupError(`dotnet build failed: ${errs || `exit ${r.code}`}`);
-    }
-    return openShim(['dotnet', join(out, 'TruthgateShim.dll')], root, { env });
+    const build = ['dotnet', 'build', proj, '-o', out, '-nologo', '-v', 'q', '-clp:ErrorsOnly'];
+    return buildThenRun(build, root, () => ['dotnet', join(out, 'TruthgateShim.dll')], { env, what: 'dotnet build' });
   },
   shimTemplate: () => ({ path: SAVED, source: readFileSync(bundledTemplate('csharp', 'TruthgateShim.cs'), 'utf8') }),
   testFileGlobs: ['**/*Tests.cs', '**/*Test.cs', '**/*.Tests/**/*.cs'],
-  skipMarkers: [/\[\s*(Fact|Theory)\s*\([^)]*\bSkip\s*=/, /\[\s*Ignore\b/, /\[\s*Test\s*,\s*Ignore\b/],
+  skipMarkers: [/\[\s*\w*(Fact|Theory|Test\w*)\s*\([^)]*\bSkip\s*=/, /[\[,]\s*(Ignore|Explicit)\b/, /\bAssert\.(Ignore|Inconclusive)\s*\(/, /\bSkip\.(If|Unless)\s*\(/],
   assertPatterns: [/\bAssert\.\w+\s*\(/, /\.Should\(\)/],
   lineComment: '//',
 };

@@ -34,7 +34,7 @@ export const pythonAdapter: LanguageAdapter = {
   },
   shimTemplate: () => ({ path: SAVED, source: readFileSync(bundledTemplate('python', 'truthgate_shim.py'), 'utf8') }),
   testFileGlobs: ['**/test_*.py', '**/*_test.py'],
-  skipMarkers: [/@pytest\.mark\.(skip|skipif|xfail)\b/, /\bpytest\.(skip|xfail)\s*\(/, /@unittest\.skip/],
+  skipMarkers: [/@pytest\.mark\.(skip|skipif|xfail)\b/, /\bpytestmark\s*=.*\bmark\.(skip|skipif|xfail)\b/, /\bpytest\.(skip|xfail|importorskip)\s*\(/, /@unittest\.(skip|expectedFailure)/, /\.skipTest\s*\(/],
   assertPatterns: [/\bassert\b/, /\bself\.assert\w*\s*\(/, /\bpytest\.raises\s*\(/],
   lineComment: '#',
 };

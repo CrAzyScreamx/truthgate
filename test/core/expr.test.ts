@@ -122,6 +122,25 @@ test('refuses prototype access and eval-like escapes', () => {
   assert.throws(() => ev('x.toString', { x: {} }), ExprError);
 });
 
+test('numbers compare with a relative tolerance', () => {
+  assert.equal(ev('0.1 + 0.2 == 0.3'), true);
+  assert.equal(ev('a + b == 60.77', { a: 60.72, b: 0.05 }), true);
+  assert.equal(ev('0.1 + 0.2 <= 0.3 and not (0.1 + 0.2 > 0.3) and not (0.1 + 0.2 < 0.3)'), true);
+  assert.equal(ev('1 == 1.000001'), false);
+  assert.equal(ev('1 < 1.000001'), true);
+  assert.equal(ev('count([0.1 + 0.2], 0.3) == 1 and perm([0.1 + 0.2], [0.3]) and not unique([0.3, 0.1 + 0.2])'), true);
+  assert.equal(ev('[true] == [1]'), false);
+});
+
+test('one evaluate() is capped at 1e6 steps; separate calls do not accumulate', () => {
+  assert.throws(() => ev('all(i in range(100000): all(j in range(100000): true))'), /too expensive/);
+  assert.throws(() => ev('unique(range(2000))'), /too expensive/);
+  assert.throws(() => ev('perm(range(1001), range(1001))'), /too expensive/);
+  const e = expr.parse('all(i in range(1000): all(j in range(998): true))');
+  assert.equal(expr.evaluate(e, {}), true);
+  assert.equal(expr.evaluate(e, {}), true);
+});
+
 // Every sample is evaluated in JS and in Python; both must agree on the value, or both must fail.
 const PARITY: [string, Record<string, unknown>][] = [
   ['all(i in range(len(out)-1): out[i] <= out[i+1])', { out: [1, 2, 2, 5] }],
@@ -168,6 +187,12 @@ const PARITY: [string, Record<string, unknown>][] = [
   ['null == null and null != 0 and [] != {} and "" != 0', {}],
   ['[1] + [2] == [1, 2] and "a" + "b" == "ab"', {}],
   ['{k: [1, {z: null}]}', {}],
+  ['0.1 + 0.2 == 0.3 and a + b == 60.77', { a: 60.72, b: 0.05 }],
+  ['[0.1 + 0.2 < 0.3, 0.1 + 0.2 <= 0.3, 1 == 1.000001, 1 < 1.000001, 3 == 3.0000000001]', {}],
+  ['count([0.1 + 0.2], 0.3) + len(sorted([0.3, 0.1 + 0.2, 0.2]))', {}],
+  ['all(i in range(100000): all(j in range(100000): true))', {}],
+  ['unique(range(2000))', {}],
+  ['all(i in range(1000): all(j in range(998): true))', {}],
 ];
 
 test('toPython behaves identically under Python', (t) => {

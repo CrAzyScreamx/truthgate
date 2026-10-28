@@ -33,6 +33,21 @@ test('keeps an existing hook and runs before its trailing exit', async () => {
     '#!/bin/sh\n# truthgate:begin\nnpx -y truthgate verify || exit 1\n# truthgate:end\nlint\nexit 0\n');
 });
 
+test('sh-family and shebang-less hooks take the block; other languages get a manual step', async () => {
+  const root = await repo();
+  const hook = join(root, '.git/hooks/pre-commit');
+  for (const head of ['#!/usr/bin/env bash\n', '#!/bin/zsh -e\n', 'echo husky\n']) {
+    await writeFile(hook, head);
+    assert.equal((await installPreCommit(root)).action, 'append-block', head);
+  }
+  const py = '#!/usr/bin/env python3\nprint("lint")\n';
+  await writeFile(hook, py);
+  const c = await installPreCommit(root);
+  const [line] = await applyChanges(root, [c], false);
+  assert.match(line!, /^skip \.git\/hooks\/pre-commit \(exists and differs; not overwritten\) - existing hook is not sh: add `npx -y truthgate verify \|\| exit 1`/);
+  assert.equal(await readFile(hook, 'utf8'), py);
+});
+
 test('honours core.hooksPath', async () => {
   const root = await repo();
   execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root });

@@ -4,7 +4,8 @@
 #                        out {"out":..} | {"error":"msg","kind":"rejected|crash"}
 # function specs: calls module-level `name` with the input values as positional args, in spec order.
 # sequence specs: reset -> obj = name(); ops call obj.<op>(...); state -> obj.state() if defined, else vars(obj).
-# ValueError/TypeError -> rejected; any other Exception -> crash. A missing function exits (shim error).
+# Rejected (the function refused the input): ValueError, or any exception class named "Rejected"
+#   (class Rejected(Exception): pass). Everything else, TypeError included, is a crash. A missing function exits (shim error).
 # JSON limits: ints stay int, decimals arrive as float; outputs must be JSON-serialisable (tuple -> list; NaN/inf -> crash).
 import importlib.util, json, os, sys
 
@@ -43,9 +44,8 @@ for line in sys.stdin:
             out = obj.state() if hasattr(obj, "state") else vars(obj)
         else:
             out = f(*msg["input"].values())
-    except (ValueError, TypeError) as e:
-        reply({"error": f"{type(e).__name__}: {e}", "kind": "rejected"})
     except Exception as e:
-        reply({"error": f"{type(e).__name__}: {e}", "kind": "crash"})
+        rejected = isinstance(e, ValueError) or type(e).__name__ == "Rejected"
+        reply({"error": f"{type(e).__name__}: {e}", "kind": "rejected" if rejected else "crash"})
     else:
         reply({"out": out})

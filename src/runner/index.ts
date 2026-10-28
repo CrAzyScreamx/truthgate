@@ -51,6 +51,16 @@ const show = (v: unknown) => {
   return s.length > 300 ? `${s.slice(0, 300)}...` : s;
 };
 
+/** Evaluate an ensures/invariant. Its inputs were valid, so an ExprError means the output (or state) is wrong: a failure. */
+function check(ast: Expr, env: Record<string, unknown>, name: string): { ok: boolean; err: string } {
+  try {
+    return { ok: truth(expr.evaluate(ast, env), name), err: '' };
+  } catch (e) {
+    if (!(e instanceof ExprError)) throw e;
+    return { ok: false, err: ` (expression error: ${e.message})` };
+  }
+}
+
 const abortReason = (e: unknown) =>
   e instanceof Timeout ? 'timeout' : e instanceof ExprError ? `expression error: ${e.message}` : `shim error: ${(e as Error).message}`;
 
@@ -63,9 +73,12 @@ type Outcome = { failed: boolean; interrupted: boolean; counterexample: unknown;
 function verdictOf(spec: Spec, p: Property, runs: number, r: Outcome, abort: string | null, fail: { ce: unknown; why: string } | null, t0: number, seed: number): Verdict {
   const base = { specId: spec.id, property: p.name, seed, runs: r.numRuns };
   const v = (kind: Verdict['kind'], detail: string, counterexample?: unknown): Verdict => ({ ...base, kind, detail, counterexample, durationMs: Date.now() - t0 });
+  // A counterexample already found survives a later timeout or shim death while shrinking.
+  if (fail) return v('FALSIFIED', fail.why, fail.ce);
   if (abort) return v('UNVERIFIED', `${abort} (after ${r.numRuns} runs)`);
-  if (r.failed && r.counterexample && fail) return v('FALSIFIED', fail.why, fail.ce);
   if (r.failed && !r.interrupted) return v('UNVERIFIED', `preconditions too strict: ${r.numSkips} inputs discarded vs ${r.numRuns} run`);
+  // fast-check's time limit resolves before a hung predicate notices, so `interrupted` can arrive without `abort`.
+  if (r.numRuns === 0 && !r.interrupted) return v('UNVERIFIED', 'no inputs were run');
   if (r.numRuns < runs) return v('UNVERIFIED', `timeout after ${r.numRuns} of ${runs} runs`);
   return v('TESTED', tested(r.numRuns, r.numSkips));
 }
@@ -88,24 +101,23 @@ async function runFunctionProp(spec: Spec, p: Property, ast: Expr, caller: Funct
     if (abort) return true;
     let skip = false;
     let res: CallResult | undefined;
-    let ok = true;
     try {
       skip = !reqs.every((r) => truth(expr.evaluate(r, { ...input }), 'requires'));
       if (!skip) {
         res = await timed(caller.call(fn, input), opts.deadline);
         if (!res.ok) skip = res.kind === 'rejected' || !!spec.allowCrash;
-        else ok = truth(expr.evaluate(ast, { ...input, out: res.out }), p.name);
       }
     } catch (e) {
       abort = abortReason(e);
       return true;
     }
     fc.pre(!skip);
-    if (res && !res.ok) {
-      fail = { ce: input, why: `crash for ${show(input)}: ${res.error}` };
+    if (!res!.ok) {
+      fail = { ce: input, why: `crash for ${show(input)}: ${res!.error}` };
       return false;
     }
-    if (!ok) fail = { ce: input, why: `${p.name} failed for ${show(input)}: out = ${show(res?.ok && res.out)}` };
+    const { ok, err } = check(ast, { ...input, out: res!.out }, p.name);
+    if (!ok) fail = { ce: input, why: `${p.name} failed for ${show(input)}: out = ${show(res!.out)}${err}` };
     return ok;
   });
   const r = await fc.check(prop, checkOpts(opts.seed, runs, opts.deadline));
@@ -131,17 +143,16 @@ async function runSequenceProp(spec: Spec, p: Property, ast: Expr, caller: Funct
           trace.push({ op: op.name, input });
           let res: CallResult;
           let state: unknown;
-          let ok: boolean;
           try {
             res = await timed(caller.call(op.name, input), opts.deadline);
             if (!res.ok && res.kind === 'crash' && !spec.allowCrash) return failNow(`${op.name} crashed: ${res.error}`);
             state = await timed(caller.state(), opts.deadline);
-            ok = truth(expr.evaluate(ast, { state, op: op.name, input, out: res.ok ? res.out : null }), p.name);
           } catch (e) {
             if (!abort && !fail) abort = abortReason(e);
             throw e;
           }
-          if (!ok) failNow(`invariant ${p.name} broken (state = ${show(state)})`);
+          const { ok, err } = check(ast, { state, op: op.name, input, out: res.ok ? res.out : null }, p.name);
+          if (!ok) failNow(`invariant ${p.name} broken (state = ${show(state)})${err}`);
         },
         toString: () => `${op.name}(${show(input)})`,
       }),

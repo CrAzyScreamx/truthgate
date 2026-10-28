@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { LanguageAdapter } from '../../contract.ts';
-import { exec, probe } from '../../runner/proc.ts';
+import { probe } from '../../runner/proc.ts';
 import { openShim } from '../../runner/shim.ts';
-import { bundledTemplate, genericShim, SetupError, shimCommand, splitTarget } from '../common.ts';
+import { buildThenRun, bundledTemplate, genericShim, shimCommand, splitTarget } from '../common.ts';
 
 const SAVED = '.truthgate/shims/TruthgateShim.java';
 
@@ -29,23 +29,12 @@ export const javaAdapter: LanguageAdapter = {
     // Compile the working tree's source (never stale build output) into a temp dir.
     const out = await mkdtemp(join(tmpdir(), 'truthgate-java-'));
     const srcRoot = join(root, dirname(file), ...(pkg?.split('.').map(() => '..') ?? []));
-    const r = await exec(['javac', '-encoding', 'UTF-8', '-nowarn', '-d', out, '-sourcepath', srcRoot, join(root, file)], { timeoutMs: 120_000 });
-    if (r.code !== 0) {
-      await rm(out, { recursive: true, force: true });
-      throw new SetupError(`javac failed: ${(r.error ?? r.stderr).trim().split('\n').slice(0, 3).join(' | ')}`);
-    }
-    const caller = openShim(['java', '-cp', out, shim], root, { env });
-    return {
-      ...caller,
-      async close() {
-        await caller.close();
-        await rm(out, { recursive: true, force: true });
-      },
-    };
+    const javac = ['javac', '-encoding', 'UTF-8', '-nowarn', '-d', out, '-sourcepath', srcRoot, join(root, file)];
+    return buildThenRun(javac, root, () => ['java', '-cp', out, shim], { tmp: out, env, what: 'javac' });
   },
   shimTemplate: () => ({ path: SAVED, source: readFileSync(bundledTemplate('java', 'TruthgateShim.java'), 'utf8') }),
   testFileGlobs: ['**/src/test/**/*.java', '**/*Test.java', '**/*Tests.java'],
-  skipMarkers: [/@Disabled\b/, /@Ignore\b/],
+  skipMarkers: [/@Disabled\w*/, /@Ignore\b/, /\bassume(True|That)\s*\(\s*false\b/, /\bassumeFalse\s*\(\s*true\b/, /\bAssumptions\.abort\s*\(/],
   assertPatterns: [/\bassert\w*\s*\(/, /^\s*assert\s/, /\bverify\s*\(/],
   lineComment: '//',
 };

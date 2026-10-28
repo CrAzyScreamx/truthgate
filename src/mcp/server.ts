@@ -4,24 +4,31 @@ import { join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { Approvals, LanguageAdapter, Lang, RunReport, Spec, TamperFinding } from '../contract.ts';
+import type { LanguageAdapter, Lang, RunReport, Spec } from '../contract.ts';
 import { summarize, verdictLine } from '../agents/summary.ts';
+
+type ApprovalState = 'approved' | 'pending' | 'changed';
+const approvalText: Record<ApprovalState, string> = {
+  approved: 'approved',
+  pending: 'pending: NOT APPROVED (ask the user to run `npx truthgate approve`)',
+  changed: 'changed: APPROVAL VOID, the spec was edited after approval (only the user can re-approve)',
+};
 
 export interface McpDeps {
   verify(root: string, opts: { deep?: boolean; all?: boolean }): Promise<RunReport>;
   loadSpecs(root: string): Promise<Spec[]>;
-  checkApprovals(root: string, specs: Spec[]): Promise<TamperFinding[]>;
+  approvalStates(root: string, specs: Spec[]): Promise<Record<string, ApprovalState>>;
   getAdapter(lang: Lang): LanguageAdapter;
 }
 
 async function defaultDeps(): Promise<McpDeps> {
-  const [{ verify }, { loadSpecs }, { checkApprovals }, { getAdapter }] = await Promise.all([
+  const [{ verify }, { loadSpecs }, { approvalStates }, { getAdapter }] = await Promise.all([
     import('../core/verify.ts'),
     import('../core/spec.ts'),
     import('../core/approve.ts'),
     import('../lang/index.ts'),
   ]);
-  return { verify, loadSpecs, checkApprovals, getAdapter };
+  return { verify, loadSpecs, approvalStates, getAdapter };
 }
 
 const idArg = { id: { type: 'string', description: 'spec id' } };
@@ -75,16 +82,13 @@ export function createServer(root: string, deps?: McpDeps): Server {
     },
     async list_specs() {
       const specs = await d!.loadSpecs(root);
-      const approved = (await readJson<Approvals>(join(root, '.truthgate', 'approved.json')))?.specs ?? {};
       if (specs.length === 0) return 'no specs in .truthgate/specs/';
-      return specs.map((s) => `${s.id} ${s.lang} ${s.kind} ${s.target} ${Object.hasOwn(approved, s.id) ? 'approved' : 'NOT APPROVED'}`).join('\n');
+      const states = await d!.approvalStates(root, specs);
+      return specs.map((s) => `${s.id} ${s.lang} ${s.kind} ${s.target} ${states[s.id] ?? 'pending'}`).join('\n');
     },
     async spec_status(a) {
       const spec = await findSpec(a.id);
-      const approved = (await readJson<Approvals>(join(root, '.truthgate', 'approved.json')))?.specs ?? {};
-      const tamper = (await d!.checkApprovals(root, [spec])).filter((t) => t.file === spec.file);
-      const state = !Object.hasOwn(approved, spec.id) ? 'NOT APPROVED (ask the user to run `npx truthgate approve`)'
-        : tamper.length ? `APPROVAL VOID: ${tamper.map((t) => t.detail).join('; ')}` : 'approved';
+      const state = approvalText[(await d!.approvalStates(root, [spec]))[spec.id] ?? 'pending'];
       const verdicts = (await lastRun())?.verdicts.filter((v) => v.specId === spec.id) ?? [];
       return [`${spec.id} (${spec.file}) -> ${spec.target}`, `approval: ${state}`,
         verdicts.length ? verdicts.map(verdictLine).join('\n') : 'no verdicts in the last run'].join('\n');
@@ -106,7 +110,7 @@ export function createServer(root: string, deps?: McpDeps): Server {
     },
     async shim_template(a) {
       const spec = await findSpec(a.id);
-      if (spec.lang === 'ts' || spec.lang === 'js') return `${spec.id} is ${spec.lang}: imported in-process, no shim needed.`;
+      if (spec.lang === 'ts' || spec.lang === 'js') return `${spec.id} is ${spec.lang}: run by the bundled JS shim, no shim file needed.`;
       const t = d!.getAdapter(spec.lang).shimTemplate(spec, root);
       return `save to ${t.path}:\n${t.source}`;
     },

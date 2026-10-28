@@ -5,7 +5,7 @@ import type { LanguageAdapter, Spec, TypeSpec } from '../../contract.ts';
 import { parseType } from '../../core/typespec.ts';
 import { probe } from '../../runner/proc.ts';
 import { openShim } from '../../runner/shim.ts';
-import { argOrder, bundledTemplate, missingShim, safeId, shimCommand, splitTarget } from '../common.ts';
+import { argOrder, buildThenRun, bundledTemplate, missingShim, safeId, shimCommand, splitTarget } from '../common.ts';
 
 const rustTy = (t: TypeSpec): string =>
   t.t === 'int' ? 'i64' : t.t === 'decimal' ? 'f64' : t.t === 'str' ? 'String' : t.t === 'bool' ? 'bool' : t.t === 'list' ? `Vec<${rustTy(t.of)}>` : 'J';
@@ -40,7 +40,7 @@ export function rustTemplate(spec: Spec, root: string): { path: string; source: 
     : [`        "${name}" => target::${name}(${argsOf(name, spec.inputs)}).tj(),`];
   return {
     path,
-    source: `// truthgate shim (Rust) for spec "${spec.id}". Save as ${path}; truthgate runs \`cargo run -q --example ${example(spec)}\`.
+    source: `// truthgate shim (Rust) for spec "${spec.id}". Save as ${path}; truthgate builds it with \`cargo build --example ${example(spec)}\` and runs the binary.
 // Needs a library crate (src/lib.rs) with the target and its module \`pub\`. No dependencies: a tiny JSON reader/writer is included.
 // Protocol (JSON Lines): in {"op":"call","fn":..,"input":{..}} | {"op":"reset"} | {"op":"state"}; out {"out":..} | {"error":..,"kind":..}
 // Type mapping: int -> i64, decimal -> f64, str -> String, bool -> bool, list<T> -> Vec<T>, record/oneof -> J (raw JSON).
@@ -116,11 +116,19 @@ export const rustAdapter: LanguageAdapter = {
       return openShim(command, cwd);
     }
     if (!existsSync(join(root, path))) throw missingShim(spec, path);
-    return openShim(['cargo', 'run', '-q', '--example', example(spec)], root);
+    // The built example's path comes from cargo's JSON messages (honours workspaces and CARGO_TARGET_DIR).
+    const exe = (stdout: string) => {
+      const line = stdout.split('\n').reverse().find((l) => l.includes('"executable":"') && l.includes(example(spec)));
+      const e = line && (JSON.parse(line) as { executable?: string }).executable;
+      return e ? [e] : undefined;
+    };
+    const build = ['cargo', 'build', '-q', '--example', example(spec), '--message-format=json-render-diagnostics'];
+    return buildThenRun(build, root, exe, { what: 'cargo build' });
   },
   shimTemplate: (spec: Spec, root = process.cwd()) => rustTemplate(spec, root),
-  testFileGlobs: ['**/tests/**/*.rs'],
-  skipMarkers: [/#\[\s*ignore\b/],
+  // src/**: idiomatic unit tests are inline #[cfg(test)] modules.
+  testFileGlobs: ['**/tests/**/*.rs', '**/src/**/*.rs'],
+  skipMarkers: [/#\[\s*ignore\b/, /#\[\s*cfg_attr\s*\([^\]]*\bignore\b/],
   assertPatterns: [/\b(debug_)?assert(_eq|_ne)?!\s*\(/],
   lineComment: '//',
 };

@@ -77,11 +77,8 @@ def check(name, prop):
             assume(False)
         try:
             raw = TARGET(*copy.deepcopy(list(inp.values())))
-        except (ValueError, TypeError):
-            r["skips"] += 1
-            assume(False)
         except Exception as e:
-            if ALLOW_CRASH:
+            if isinstance(e, ValueError) or type(e).__name__ == "Rejected" or ALLOW_CRASH:
                 r["skips"] += 1
                 assume(False)
             r.update(ce=inp, why=f"crash for {show(inp)}: {type(e).__name__}: {e}")
@@ -91,14 +88,14 @@ def check(name, prop):
         except (ValueError, TypeError) as e:
             r.update(ce=inp, why=f"crash for {show(inp)}: unserialisable output: {e}")
             raise AssertionError(r["why"])
-        try:
-            ok =_bool(prop({**inp, "out": out}))
-        except Exception as e:
-            r["abort"] = f"expression error: {e}"
-            return
         r["runs"] += 1
+        try:
+            ok, err = _bool(prop({**inp, "out": out})), ""
+        except Exception as e:
+            # requires held, so an error here comes from the output: a failure, not a dodge
+            ok, err = False, f" (expression error: {e})"
         if not ok:
-            r.update(ce=inp, why=f"{name} failed for {show(inp)}: out = {show(out)}")
+            r.update(ce=inp, why=f"{name} failed for {show(inp)}: out = {show(out)}{err}")
             raise AssertionError(r["why"])
 
     try:
@@ -149,8 +146,8 @@ export async function runHypothesis(spec: Spec, root: string, opts: RunOptions):
       const l = byName.get(p.name);
       if (!l) return { ...base, kind: 'UNVERIFIED', detail: 'timeout (Hypothesis run did not finish)' };
       const v = (kind: Verdict['kind'], detail: string): Verdict => ({ ...base, runs: l.runs, kind, detail });
-      if (l.abort) return v('UNVERIFIED', `${l.abort} (after ${l.runs} runs)`);
       if (l.status === 'fail') return { ...v('FALSIFIED', l.why!), counterexample: l.ce };
+      if (l.abort) return v('UNVERIFIED', `${l.abort} (after ${l.runs} runs)`);
       if (l.status === 'error') return v('UNVERIFIED', `Hypothesis error: ${l.why}`);
       if (l.skips > l.runs) return v('UNVERIFIED', `preconditions too strict: ${l.skips} inputs discarded vs ${l.runs} run`);
       if (!l.runs) return v('UNVERIFIED', 'no inputs were run');

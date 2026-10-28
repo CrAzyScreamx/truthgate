@@ -105,6 +105,7 @@ async function init(root: string, args: ReturnType<typeof parseArgs>): Promise<n
     let hypothesis = false;
     if (await hasPython(root)) {
       hypothesis = yes || (!!p && !/^n/i.test(await p.ask('Python found. Add Hypothesis (dev dependency) for native property tests? [Y/n] ')));
+      if (!yes && !p) console.log('Python found: rerun with --yes to add Hypothesis (native path); using the shim for now.');
     }
     const instructOnly = agents.filter((a) => !installers[a].enforces);
     const hookDefault = instructOnly.length > 0;

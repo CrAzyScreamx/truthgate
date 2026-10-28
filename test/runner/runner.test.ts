@@ -15,6 +15,12 @@ export const off = (x: number) => (x > 7 ? x * 2 + 1 : x * 2);
 export const boom = (x: number) => { if (x > 3) throw new Error('kaboom'); return x * 2; };
 export const picky = (x: number) => { if (x % 2) throw new RangeError('odd'); return x * 2; };
 export const nul = (_x: number) => null;
+export const nullAbove = (x: number) => (x > 6 ? null : x * 2);
+export const typo = (x: number) => (x > 6 ? (null as any).v : x * 2);
+export const refuses = (x: number) => { if (x > 6) { const e = new Error('no'); e.name = 'Rejected'; throw e; } return x * 2; };
+export const spin = (_x: number) => { for (;;) {} };
+let failed = false;
+export const dieAfterFail = (x: number) => { if (failed) process.exit(1); if (x >= 5) { failed = true; return -1; } return x * 2; };
 export const sortInPlace = (xs: number[]) => xs.sort((a, b) => a - b);
 export class Counter {
   n = 0;
@@ -25,6 +31,11 @@ export class Leaky {
   n = 0;
   inc(k: number) { this.n += k; }
   dec(k: number) { if (k > this.n + 1) throw new RangeError('below zero'); this.n -= k; }
+}
+export class Nully {
+  n: number | null = 0;
+  inc(k: number) { this.n = k === 3 ? null : (this.n ?? 0) + k; }
+  dec(_k: number) {}
 }
 `,
 );
@@ -111,13 +122,27 @@ test('rejected inputs are skipped; requires discards; >50% discarded -> UNVERIFI
   assert.match(strict.detail, /preconditions too strict/);
 });
 
-test('expression type errors are UNVERIFIED, not FALSIFIED', async () => {
-  const v = await one(fnSpec('nul', 'out > 1'));
-  assert.equal(v.kind, 'UNVERIFIED');
+test('TypeError is a crash; RangeError and errors named Rejected are rejected', async () => {
+  const v = await one(fnSpec('typo', 'out == x * 2'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.deepEqual(v.counterexample, { x: 7 });
+  assert.match(v.detail, /TypeError/);
+  const r = await one(fnSpec('refuses', 'out == x * 2', { inputs: { x: 'int[0,12]' } }));
+  assert.equal(r.kind, 'TESTED', r.detail);
+  assert.match(r.detail, /inputs discarded/);
+});
+
+test('ensures ExprError (wrong-typed out) is FALSIFIED; requires ExprError is UNVERIFIED', async () => {
+  const v = await one(fnSpec('nullAbove', 'out == x * 2 or out > x'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.deepEqual(v.counterexample, { x: 7 });
   assert.match(v.detail, /expression error/);
   const nb = await one(fnSpec('dbl', 'out + 1'));
-  assert.equal(nb.kind, 'UNVERIFIED');
+  assert.equal(nb.kind, 'FALSIFIED');
   assert.match(nb.detail, /expected bool/);
+  const req = await one(fnSpec('dbl', 'out == x * 2', { requires: ['x > "a"'] }));
+  assert.equal(req.kind, 'UNVERIFIED');
+  assert.match(req.detail, /expression error/);
   const parse = await one(fnSpec('dbl', 'out ==='));
   assert.equal(parse.kind, 'UNVERIFIED');
   assert.equal(parse.property, undefined);
@@ -128,16 +153,35 @@ test('inputs are cloned: in-place mutation cannot fake perm()', async () => {
   assert.equal(v.kind, 'TESTED', v.detail);
 });
 
+test('a hung JS target is killed at the deadline -> UNVERIFIED timeout', async () => {
+  const t0 = Date.now();
+  const v = await one(fnSpec('spin', 'out == 1'), opts({ deadline: Date.now() + 1500 }));
+  assert.equal(v.kind, 'UNVERIFIED');
+  assert.match(v.detail, /timeout/);
+  assert.ok(Date.now() - t0 < 6000, `took ${Date.now() - t0} ms`);
+});
+
+test('a counterexample found before the shim dies is kept (fail before abort)', async () => {
+  const v = await one(fnSpec('dieAfterFail', 'out == x * 2'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.ok((v.counterexample as { x: number }).x >= 5);
+});
+
+test('zero completed runs is never TESTED', async () => {
+  const v = await one(fnSpec('dbl', 'out == x * 2'), opts({ runs: 0 }));
+  assert.equal(v.kind, 'UNVERIFIED');
+  assert.match(v.detail, /no inputs were run/);
+});
+
 test('deadline already passed -> UNVERIFIED timeout', async () => {
   const v = await one(fnSpec('dbl', 'out == x * 2'), opts({ deadline: Date.now() - 1 }));
   assert.equal(v.kind, 'UNVERIFIED');
   assert.match(v.detail, /timeout/);
 });
 
-test('missing export -> one spec-level UNVERIFIED', async () => {
+test('missing export -> UNVERIFIED shim error', async () => {
   const v = await one(fnSpec('nope', 'out == 1'));
   assert.equal(v.kind, 'UNVERIFIED');
-  assert.equal(v.property, undefined);
   assert.match(v.detail, /no exported function/);
 });
 
@@ -149,4 +193,37 @@ test('sequence: correct guard -> TESTED, planted guard bug -> FALSIFIED with a s
   assert.deepEqual(steps, [{ op: 'dec', input: { k: 1 } }]);
   assert.equal(steps.at(-1)!.op, 'dec');
   assert.match(v.detail, /state = \{"n":-1\}/);
+});
+
+test('sequence: invariant ExprError on the state is FALSIFIED', async () => {
+  const v = await one(seqSpec('Nully'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.deepEqual(v.counterexample, [{ op: 'inc', input: { k: 3 } }]);
+  assert.match(v.detail, /expression error/);
+});
+
+test('python shim: TypeError is a crash, ValueError and Rejected are rejected', async () => {
+  writeFileSync(
+    join(root, 'p.py'),
+    `class Rejected(Exception):
+    pass
+
+def typo(x):
+    return None + 1 if x > 6 else x * 2
+
+def refuses(x):
+    if x > 8:
+        raise Rejected("no")
+    if x > 6:
+        raise ValueError("no")
+    return x * 2
+`,
+  );
+  const py = (fn: string) => fnSpec(fn, 'out == x * 2', { lang: 'python', target: `p.py::${fn}`, inputs: { x: 'int[0,12]' } });
+  const v = await one(py('typo'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.match(v.detail, /TypeError/);
+  const r = await one(py('refuses'));
+  assert.equal(r.kind, 'TESTED', r.detail);
+  assert.match(r.detail, /inputs discarded/);
 });

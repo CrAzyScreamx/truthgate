@@ -20,10 +20,11 @@ export function spawnTool(command: string[], opts: SpawnOptions = {}): ChildProc
   return spawn(cmd, args, { ...opts, windowsHide: true });
 }
 
-/** Kill a process and its children (go run, cargo run and dotnet run start a grandchild). */
+/** Kill a process now. Shims are direct children (go/cargo shims are built, then run), so only a cmd.exe
+ *  wrapper (.cmd tools on Windows) needs `taskkill /t`, which can take seconds there. */
 export function killTree(child: ChildProcess): void {
-  if (child.exitCode !== null || child.pid === undefined) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }).unref();
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+  if (process.platform === 'win32' && /cmd\.exe$/i.test(child.spawnfile)) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }).unref();
   else child.kill('SIGKILL');
 }
 

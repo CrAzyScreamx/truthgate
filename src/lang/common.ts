@@ -1,7 +1,10 @@
 import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Lang, Spec } from '../contract.ts';
+import type { FunctionCaller, Lang, Spec } from '../contract.ts';
+import { exec } from '../runner/proc.ts';
+import { openShim } from '../runner/shim.ts';
 
 /** Bundled template file. Same relative depth from src/lang/ and dist/lang/, so this works in both. */
 export const bundledTemplate = (lang: Lang, file: string) => fileURLToPath(new URL(`../../src/lang/${lang}/templates/${file}`, import.meta.url));
@@ -36,3 +39,30 @@ export class SetupError extends Error {}
 
 export const missingShim = (spec: Spec, path: string) =>
   new SetupError(`shim missing: run \`npx truthgate shim ${spec.id}\` and save it to ${path}`);
+
+/** Run a build step, then `run(stdout)` as the shim: a direct child (not `go run`/`cargo run`), so the
+ *  deadline can kill it at once. `tmp` (if given) is removed on close or on a failed build. */
+export async function buildThenRun(
+  build: string[],
+  cwd: string,
+  run: (stdout: string) => string[] | undefined,
+  opts: { tmp?: string; env?: NodeJS.ProcessEnv; what: string },
+): Promise<FunctionCaller> {
+  const cleanup = () => (opts.tmp ? rm(opts.tmp, { recursive: true, force: true }) : Promise.resolve());
+  const r = await exec(build, { cwd, env: opts.env, timeoutMs: 300_000 });
+  const command = r.code === 0 ? run(r.stdout) : undefined;
+  if (!command) {
+    await cleanup();
+    const all = (r.error ?? `${r.stderr}\n${r.stdout}`).split('\n').map((l) => l.trim()).filter(Boolean);
+    const errs = all.filter((l) => /error/i.test(l));
+    throw new SetupError(`${opts.what} failed: ${(errs.length ? errs : all).slice(0, 3).join(' | ') || `exit ${r.code}`}`);
+  }
+  const caller = openShim(command, cwd, { env: opts.env });
+  return {
+    ...caller,
+    async close() {
+      await caller.close();
+      await cleanup();
+    },
+  };
+}

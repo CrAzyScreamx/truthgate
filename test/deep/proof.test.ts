@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Config, Spec, Verdict } from '../../src/contract.ts';
-import { auditProof, stripComments, withProverPath } from '../../src/deep/proof.ts';
+import { auditProof, findTool, run, stripComments, withProverPath } from '../../src/deep/proof.ts';
 import type { RunSpecFn } from '../../src/deep/index.ts';
 
 const root = path.resolve(import.meta.dirname, '../..');
@@ -169,4 +169,24 @@ test('withProverPath accepts a dir or an exe and prepends it', () => {
   assert.ok(withProverPath(exe)[key]!.startsWith(path.join(os.tmpdir(), 'bin') + path.delimiter));
   assert.ok(withProverPath(os.tmpdir())[key]!.startsWith(path.resolve(os.tmpdir()) + path.delimiter));
   assert.equal(withProverPath(undefined), process.env);
+});
+
+test('findTool resolves from PATH; run reports missing tools and kills on the deadline', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-findtool-'));
+  try {
+    const name = process.platform === 'win32' ? 'faketool.exe' : 'faketool';
+    fs.writeFileSync(path.join(dir, name), '');
+    assert.equal(findTool('faketool', withProverPath(dir)), path.join(dir, name));
+    assert.equal(findTool('no-such-tool-tg', withProverPath(dir)), null);
+    assert.deepEqual(await run('no-such-tool-tg', [], dir, process.env, Date.now() + 5000), {
+      code: -1, out: '', err: '', missing: true,
+    });
+    assert.equal((await run('node', [], os.tmpdir(), process.env, Date.now() - 1)).timedOut, true);
+    const t0 = Date.now();
+    const r = await run('node', ['-e', 'setInterval(() => {}, 1000)'], os.tmpdir(), process.env, Date.now() + 300);
+    assert.equal(r.timedOut, true);
+    assert.ok(Date.now() - t0 < 5000);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

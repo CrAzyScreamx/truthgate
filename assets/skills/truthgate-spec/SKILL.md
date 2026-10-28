@@ -82,7 +82,8 @@ invariant:
   - name: never_negative
     expr: "all(q in values(state.stock): q >= 0)"
 ```
-A guarded op that refuses (raises a validation error) should return a `rejected` error, which is
+A guarded op that refuses the input should throw the language's refusal error (`ValueError`, `RangeError`, a class
+named `Rejected`, ...; see truthgate-shim). That becomes a `rejected` result, which is
 a normal outcome. Only a broken invariant or a `crash` is a failure.
 
 ## Approval (required)

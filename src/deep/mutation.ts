@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Config, DeepReport, Lang, Spec } from '../contract.ts';
+import { git } from '../core/diff.ts';
+import { targetFile } from '../core/spec.ts';
 import type { Deps } from './index.ts';
 
 export interface Mutant {
@@ -138,14 +139,6 @@ export function parseHunks(diff: string): Set<number> | null {
   return any ? lines : null;
 }
 
-function git(root: string, args: string[]): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd: root, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) =>
-      resolve(err ? null : stdout),
-    );
-  });
-}
-
 /** Spread picks: across files round-robin, and within a file across lines before reusing a line. */
 export function spread(perFile: Mutant[][]): Mutant[] {
   const interleave = (groups: Mutant[][]) => {
@@ -163,15 +156,13 @@ export function spread(perFile: Mutant[][]): Mutant[] {
   );
 }
 
-const targetFile = (s: Spec) => s.target.split('::')[0]!.replace(/\\/g, '/');
-
-async function candidates(root: string, files: string[], specs: Spec[], deps: Deps): Promise<Mutant[]> {
+async function candidates(root: string, base: string, files: string[], specs: Spec[], deps: Deps): Promise<Mutant[]> {
   const perFile: Mutant[][] = [];
   for (const file of files) {
     const src = await fs.readFile(path.join(root, file), 'utf8').catch(() => null);
     if (src === null) continue;
     const lang = specs.find((s) => targetFile(s) === file)!.lang;
-    const diff = await git(root, ['diff', '-U0', '--no-color', '--no-ext-diff', 'HEAD', '--', file]);
+    const diff = await git(root, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-renames', base, '--', file]).catch(() => null);
     const changedLines = diff === null ? null : parseHunks(diff);
     const orig = src.split('\n');
     const masked = mask(src, lang, deps.lineComment(lang)).split('\n');
@@ -198,7 +189,7 @@ export async function mutationCheck(
   const changedSet = new Set(changed.map((f) => f.replace(/\\/g, '/')));
   const files = [...new Set(specs.map(targetFile))].filter((f) => changedSet.has(f));
   if (!files.length) return undefined;
-  const pool = await candidates(root, files, specs, deps);
+  const pool = await candidates(root, await deps.baseCommit(root), files, specs, deps);
   const result = { caught: 0, total: 0, survivors: [] as { file: string; line: number; desc: string }[], durationMs: 0 };
   if (pool.length) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'truthgate-mut-'));
@@ -233,7 +224,7 @@ export async function mutationCheck(
         else result.survivors.push({ file: mu.file, line: mu.line, desc: mu.desc });
       }
     } finally {
-      await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 });
+      await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
     }
   }
   result.durationMs = Date.now() - start;
