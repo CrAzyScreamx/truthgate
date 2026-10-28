@@ -61,7 +61,9 @@ Status values: Pending · In Progress · Done · Blocked (with the reason).
 | M5.1 | Integrate, run the definition of done, commit | lead | Done |
 | M5.2 | Review round 1 (R1 security/correctness, R2 plan fidelity/simplicity/DoD) | R1, R2 | Done |
 | M5.3 | Fix round 1 | coders | Done |
-| M5.4 | Review round 2 + fixes (last round; leftovers → KNOWN_ISSUES.md) | all | Pending |
+| M5.4 | Review round 2 | R1, R2 | Done |
+| M5.5 | Fix round 2 (`.build/FIX-final.md`): baseline laundering, int tolerance, JS stack overflow, Windows kill tree, approve shows tamper, hook EISDIR | C1, C2, C3 | Done |
+| M5.6 | Review round 3, added by the user (leftovers → KNOWN_ISSUES.md; a blocker → ask the user) | R1, R2 | Pending |
 
 ## Contract requests
 (Coders: add a line here if you need something changed in `src/contract.ts`.)

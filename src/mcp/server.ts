@@ -5,9 +5,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { LanguageAdapter, Lang, RunReport, Spec } from '../contract.ts';
+import type { ApprovalState } from '../core/approve.ts';
 import { summarize, verdictLine } from '../agents/summary.ts';
 
-type ApprovalState = 'approved' | 'pending' | 'changed';
 const approvalText: Record<ApprovalState, string> = {
   approved: 'approved',
   pending: 'pending: NOT APPROVED (ask the user to run `npx truthgate approve`)',

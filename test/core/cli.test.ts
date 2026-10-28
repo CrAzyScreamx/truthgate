@@ -62,6 +62,21 @@ test('init for an instruct-only agent installs the pre-commit hook by default an
   const again = cli(root, 'init', '--agent', 'amp', '--yes');
   assert.equal(again.code, 0);
   assert.doesNotMatch(again.out, /^(create|merge|update) /m);
+  assert.match(again.out, /and at every commit \(pre-commit hook\)/); // already installed: still a gate
+});
+
+test('R1-N4: init does not promise a commit gate when the existing hook is not sh', async () => {
+  const root = await repo({ 'a.txt': 'x' });
+  const { put } = await import('./helpers.ts');
+  const py = '#!/usr/bin/env python3\nprint("mine")\n';
+  await put(root, '.git/hooks/pre-commit', py);
+  const r = cli(root, 'init', '--agent', 'amp', '--yes');
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /amp: instruct-only/);
+  assert.doesNotMatch(r.out, /at every commit/);
+  assert.equal(await readFile(join(root, '.git/hooks/pre-commit'), 'utf8'), py);
+  const fresh = cli(await repo({ 'a.txt': 'x' }), 'init', '--agent', 'amp', '--yes');
+  assert.match(fresh.out, /and at every commit \(pre-commit hook\)/);
 });
 
 test('init for an enforcing agent skips the pre-commit hook by default', async () => {

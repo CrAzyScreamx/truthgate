@@ -4,6 +4,29 @@ import type { Config, State } from '../../src/contract.ts';
 import { runHookWith, type HookDeps } from '../../src/agents/hook.ts';
 import { installers } from '../../src/agents/index.ts';
 import { report } from './report.ts';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadSpecs } from '../../src/core/spec.ts';
+
+test('a spec path that is a directory (EISDIR from loadSpecs) blocks, not allows', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tg-hook-'));
+  await mkdir(join(root, '.truthgate/specs/zz.yaml'), { recursive: true });
+  const { d, state } = deps([false]);
+  const out = JSON.parse((await runHookWith(installers.claude, '{}', root, { ...d, loadSpecs })).stdout);
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, /could not run: .*EISDIR/);
+  assert.equal(state.consecutiveBlocks, 1);
+});
+
+test('a verify error naming a .truthgate path is a user error; others allow the stop', async () => {
+  const { d } = deps([]);
+  const enoent = Object.assign(new Error('ENOENT: no such file'), { path: 'C:\\r\\.truthgate\\specs\\a.yaml' });
+  const r1 = JSON.parse((await runHookWith(installers.claude, '{}', '.', { ...d, verify: async () => { throw enoent; } })).stdout);
+  assert.equal(r1.decision, 'block');
+  const r2 = JSON.parse((await runHookWith(installers.claude, '{}', '.', { ...d, verify: async () => { throw new Error('x'); } })).stdout);
+  assert.equal(r2.decision, undefined);
+});
 
 function deps(blocking: boolean[], start = 0) {
   const state: State = { consecutiveBlocks: start };
@@ -11,6 +34,7 @@ function deps(blocking: boolean[], start = 0) {
   const d: HookDeps = {
     verify: async () => report(blocking[i++] ?? false),
     loadConfig: async () => ({ loopCap: 3 }) as Config,
+    loadSpecs: async () => [],
     readState: async () => ({ ...state }),
     writeState: async (_r, s) => void Object.assign(state, s),
   };

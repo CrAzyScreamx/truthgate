@@ -5,7 +5,7 @@
 //                        out {"out":..} | {"error":"msg","kind":"rejected|crash"}
 // function specs: calls the named export with the input values as positional args, in spec order (fresh copies per call).
 // sequence specs: target is a class (reset = new) or a factory (reset = call); ops are methods; state = state() or own fields.
-// Rejected (the function refused the input): a RangeError, or any error whose name is "Rejected"
+// Rejected (the function refused the input): a RangeError (except stack overflow), or any error whose name is "Rejected"
 //   (class Rejected extends Error { name = 'Rejected' }). Everything else, TypeError included, is a crash.
 // Outputs cross JSON (undefined -> null, Map -> {}); BigInt or cycles -> crash. A missing function exits (shim error).
 import { createInterface } from 'node:readline';
@@ -52,7 +52,8 @@ for await (const line of lines) {
     else out = await f.apply(obj, Object.values(m.input));
     reply({ out: out ?? null });
   } catch (e) {
-    const rejected = e instanceof RangeError || e?.name === 'Rejected';
+    // A stack overflow is a RangeError in V8, but it is a bug, not a refusal.
+    const rejected = (e instanceof RangeError && !/call stack/i.test(e.message)) || e?.name === 'Rejected';
     reply({ error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), kind: rejected ? 'rejected' : 'crash' });
   }
 }

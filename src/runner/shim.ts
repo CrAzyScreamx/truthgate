@@ -75,12 +75,19 @@ export function openShim(command: string[], cwd: string, opts: { callTimeoutMs?:
     state: () => control('state'),
     async close() {
       dead ??= 'closed';
-      if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
-      child.stdin!.end();
-      const exited = new Promise((r) => child.once('exit', r));
-      const t = setTimeout(() => killTree(child), 2000);
-      await exited;
-      clearTimeout(t);
+      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        child.stdin!.end();
+        let t: NodeJS.Timeout | undefined;
+        const exited = await Promise.race([
+          new Promise<boolean>((r) => child.once('exit', () => r(true))),
+          new Promise<boolean>((r) => (t = setTimeout(() => r(false), 2000))),
+        ]);
+        clearTimeout(t);
+        if (!exited) killTree(child); // finishes in the background; don't hold up the run
+      }
+      // The kill may still be in flight, or a grandchild may hold the pipes: don't let either keep this process alive.
+      for (const s of [child.stdin, child.stdout, child.stderr]) s?.destroy();
+      child.unref();
     },
   };
 }

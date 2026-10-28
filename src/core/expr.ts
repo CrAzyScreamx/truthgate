@@ -11,9 +11,10 @@ import type { Expr, ExprApi, Helper } from '../contract.ts';
 //   abs(n) · round(x, places=0) half away from zero · sorted(xs) ascending · perm(a, b): b is a
 //   rearrangement of a · unique(xs): no two elements equal · count(xs, v): elements equal to v ·
 //   range(n) / range(a, b) (at most 100000 items) · keys(o) / values(o) in sorted key order.
-// - Numbers are equal within 1e-9 * max(1, |a|, |b|) (==, !=, ordering, and the equality inside
-//   perm/unique/count), so decimal inputs don't drift.
-// - One evaluate() may take at most 1e6 steps (quantifier iterations + perm/unique comparisons).
+// - Integers compare exactly. Other numbers are equal within 1e-9 * max(1, |a|, |b|) (==, !=,
+//   ordering, and the equality inside perm/unique/count), so decimal inputs don't drift.
+// - One evaluate() may take at most 1e6 steps: quantifier iterations, perm/unique comparisons, and
+//   the size of every list built (literals, +, range, sorted, keys, values) or scanned (sum, count).
 // - Any type error, missing field/variable or bad index throws ExprError (Python: ExprError).
 // ponytail: numbers are JS doubles; Python ints beyond 2^53 can disagree with the JS evaluator.
 
@@ -41,7 +42,9 @@ let steps = 0;
 const tick = (n = 1) => {
   if ((steps += n) > STEP_MAX) fail(`expression too expensive: more than ${STEP_MAX} steps`);
 };
-const numEq = (a: number, b: number) => a === b || Math.abs(a - b) <= TOL * Math.max(1, Math.abs(a), Math.abs(b));
+const numEq = (a: number, b: number) =>
+  a === b || (!(Number.isInteger(a) && Number.isInteger(b)) && Math.abs(a - b) <= TOL * Math.max(1, Math.abs(a), Math.abs(b)));
+const sized = <T extends unknown[]>(xs: T) => (tick(xs.length), xs);
 
 // ---------------------------------------------------------------------------------------------
 // Parser
@@ -311,7 +314,7 @@ function arith(op: string, a: unknown, b: unknown): unknown {
     const ta = tn(a), tb = tn(b);
     if (ta === tb && ta === 'number') return (a as number) + (b as number);
     if (ta === tb && ta === 'string') return (a as string) + (b as string);
-    if (ta === tb && ta === 'list') return [...(a as unknown[]), ...(b as unknown[])];
+    if (ta === tb && ta === 'list') return sized([...(a as unknown[]), ...(b as unknown[])]);
     return fail(`cannot add ${ta} and ${tb}`);
   }
   const x = asNum(a), y = asNum(b);
@@ -343,7 +346,7 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
   },
   sum(xs) {
     let t = 0;
-    for (const x of asList(xs)) t = t + asNum(x);
+    for (const x of sized(asList(xs))) t = t + asNum(x);
     return t;
   },
   min: (...a) => minmax(a, 1, 'min'),
@@ -357,7 +360,7 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
     const r = Math.floor(Math.abs(y) + 0.5) * (y < 0 ? -1 : 1);
     return p === 0 ? r : r / f;
   },
-  sorted: (xs) => [...asList(xs)].sort(cmp),
+  sorted: (xs) => sized([...asList(xs)]).sort(cmp),
   perm(a, b) {
     const x = asList(a), y = asList(b);
     if (x.length !== y.length) return false;
@@ -373,16 +376,17 @@ const HELPERS: Record<Helper, (...a: unknown[]) => unknown> = {
     tick(x.length * x.length);
     return x.every((v, i) => x.slice(i + 1).every((w) => !deepEqual(v, w)));
   },
-  count: (xs, v) => asList(xs).filter((x) => deepEqual(x, v)).length,
+  count: (xs, v) => sized(asList(xs)).filter((x) => deepEqual(x, v)).length,
   range(a, b) {
     const [lo, hi] = b === undefined ? [0, asInt(a)] : [asInt(a), asInt(b)];
     if (hi - lo > RANGE_MAX) fail('range too large');
+    tick(Math.max(0, hi - lo));
     return Array.from({ length: Math.max(0, hi - lo) }, (_, i) => lo + i);
   },
-  keys: (o) => sortedKeys(asObj(o)),
+  keys: (o) => sized(sortedKeys(asObj(o))),
   values(o) {
     const x = asObj(o);
-    return sortedKeys(x).map((k) => x[k]);
+    return sized(sortedKeys(x)).map((k) => x[k]);
   },
 };
 
@@ -393,7 +397,7 @@ function ev(e: Expr, env: Env): unknown {
     case 'var':
       return Object.hasOwn(env, e.name) ? env[e.name] : fail(`unknown variable "${e.name}"`);
     case 'list':
-      return e.items.map((x) => ev(x, env));
+      return sized(e.items.map((x) => ev(x, env)));
     case 'obj': {
       const o: Env = Object.create(null);
       for (const [k, v] of e.entries) o[k] = ev(v, env);
@@ -473,7 +477,7 @@ function toPython(e: Expr, bound: ReadonlySet<string> = new Set()): string {
     case 'var':
       return bound.has(e.name) ? `v_${e.name}` : `_var(env, ${pyStr(e.name)})`;
     case 'list':
-      return `[${e.items.map(py).join(', ')}]`;
+      return `_lst([${e.items.map(py).join(', ')}])`;
     case 'obj':
       return `{${e.entries.map(([k, v]) => `${pyStr(k)}: ${py(v)}`).join(', ')}}`;
     case 'get':
@@ -565,8 +569,20 @@ def _run(f):
     _steps[0] = 0
     return f()
 
+def _isint(v):
+    return isinstance(v, int) or v.is_integer()
+
 def _numeq(a, b):
-    return a == b or abs(a - b) <= 1e-9 * max(1, abs(a), abs(b))
+    if a == b: return True
+    if _isint(a) and _isint(b): return False
+    return abs(a - b) <= 1e-9 * max(1, abs(a), abs(b))
+
+def _sized(xs):
+    _tick(len(xs))
+    return xs
+
+def _lst(xs):
+    return _sized(xs)
 
 def _eq(a, b):
     ta = _tn(a)
@@ -593,7 +609,7 @@ def _ge(a, b): return _cmp(a, b) >= 0
 def _add(a, b):
     ta, tb = _tn(a), _tn(b)
     if ta == tb and ta in ("number", "string"): return a + b
-    if ta == tb == "list": return list(a) + list(b)
+    if ta == tb == "list": return _sized(list(a) + list(b))
     _err("cannot add " + ta + " and " + tb)
 
 def _sub(a, b): return _num(a) - _num(b)
@@ -629,7 +645,7 @@ def _len(v):
 
 def _sum(xs):
     t = 0
-    for x in _list(xs): t = t + _num(x)
+    for x in _sized(_list(xs)): t = t + _num(x)
     return t
 
 def _minmax(args, sign, fn):
@@ -655,7 +671,7 @@ def _round(x, p=0):
     return r if p == 0 else r / f
 
 def _sorted(xs):
-    return sorted(_list(xs), key=functools.cmp_to_key(_cmp))
+    return sorted(_sized(_list(xs)), key=functools.cmp_to_key(_cmp))
 
 def _perm(a, b):
     a, b = _list(a), _list(b)
@@ -677,19 +693,20 @@ def _unique(xs):
     return not any(_eq(xs[i], xs[j]) for i in range(len(xs)) for j in range(i + 1, len(xs)))
 
 def _count(xs, v):
-    return sum(1 for x in _list(xs) if _eq(x, v))
+    return sum(1 for x in _sized(_list(xs)) if _eq(x, v))
 
 def _range(a, b=None):
     lo, hi = (0, _int(a)) if b is None else (_int(a), _int(b))
     if hi - lo > ${RANGE_MAX}: _err("range too large")
+    _tick(max(0, hi - lo))
     return list(range(lo, hi))
 
 def _keys(o):
-    return sorted(_obj(o).keys())
+    return _sized(sorted(_obj(o).keys()))
 
 def _values(o):
     o = _obj(o)
-    return [o[k] for k in sorted(o.keys())]
+    return [o[k] for k in _sized(sorted(o.keys()))]
 `;
 
 function evaluate(e: Expr, env: Env): unknown {

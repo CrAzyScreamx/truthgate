@@ -5,9 +5,32 @@ import { createInterface } from 'node:readline';
 import type { Approvals, Spec, TamperFinding } from '../contract.ts';
 import { loadSpecs, SpecError, targetFile } from './spec.ts';
 import { describeType, parseType } from './typespec.ts';
-import { commitOf, showAt } from './diff.ts';
+import { changedFiles, commitOf, NotGitError, showAt } from './diff.ts';
 import { readBaseline, readRecord, writeBaseline } from './baseline.ts';
 import { CONFIG_FILE } from './config.ts';
+import { detectTamper } from './tamper.ts';
+
+const RULE_WORDS: Partial<Record<TamperFinding['rule'], string>> = {
+  'assert-removed': 'assertions removed, changed or made constant',
+  'skip-added': 'tests skipped',
+  'test-deleted': 'test file deleted',
+  'config-edited': 'truthgate config changed',
+};
+
+/** Changes since the old baseline that moving it to HEAD would accept: test-file rules and config.
+ *  Spec and approval changes are not listed; approve handles those spec by spec. */
+async function absorbed(root: string, specs: Spec[], base: string): Promise<TamperFinding[]> {
+  try {
+    const changed = await changedFiles(root, base);
+    return [
+      ...(await detectTamper(root, changed, undefined, base)),
+      ...(await checkApprovals(root, specs, base)).filter((f) => f.rule === 'config-edited'),
+    ];
+  } catch (e) {
+    if (e instanceof NotGitError) return [];
+    throw e;
+  }
+}
 
 export const APPROVALS_FILE = '.truthgate/approved.json';
 
@@ -148,7 +171,10 @@ export async function runApprove(
     process.stderr.write(`${e.message}\n`);
     return 2;
   }
-  const t = await approvalsTrust(root, (await readBaseline(root)).commit);
+  const old = await readBaseline(root);
+  const t = await approvalsTrust(root, old.commit);
+  const findings = await absorbed(root, specs, old.commit);
+  const head = await commitOf(root, 'HEAD');
   const approved: Approvals['specs'] = Object.create(null);
   if (t.a && !t.edited) Object.assign(approved, t.a.specs);
   else if (t.a !== undefined) say('The approvals file was edited outside `truthgate approve`, so every spec needs approval again.');
@@ -169,7 +195,16 @@ export async function runApprove(
 
   const rl = createInterface({ input: io.input, terminal: false });
   const lines = rl[Symbol.asyncIterator]();
+  let moveBaseline = !!head;
   try {
+    if (head && findings.length) {
+      say(`\nSince the baseline ${old.commit.slice(0, 7) || '(none)'}, these test and config changes were made:`);
+      for (const f of findings) say(`  - ${RULE_WORDS[f.rule] ?? f.rule}: ${f.file}${f.line ? `:${f.line}` : ''} (${f.detail})`);
+      io.output.write('Accept these changes as the new baseline? [y/N] ');
+      const ans = await lines.next();
+      moveBaseline = !ans.done && /^y(es)?$/i.test(ans.value.trim());
+      say(moveBaseline ? 'Accepted.' : `Kept the baseline at ${old.commit.slice(0, 7)}: verify keeps reporting these changes. Only specs will be approved.`);
+    }
     for (const [s, h] of todo) {
       say(`\n${approved[s.id] ? 'CHANGED' : 'NEW'} ${describeSpec(s)}`);
       io.output.write(`Approve ${s.id}? [y/N] `);
@@ -191,8 +226,7 @@ export async function runApprove(
     say(`Wrote ${APPROVALS_FILE}. Commit it with the specs.`);
   }
   const text = await readText(root, APPROVALS_FILE);
-  const head = await commitOf(root, 'HEAD');
-  await writeBaseline(root, { ...(text !== undefined && { approvedSha: specHash(text) }), ...(head && { commit: head, source: 'approve' as const }) });
-  if (head) say(`Baseline set to ${head.slice(0, 7)} (HEAD): truthgate now checks tests, specs and config against this commit.`);
+  await writeBaseline(root, { ...(text !== undefined && { approvedSha: specHash(text) }), ...(moveBaseline && head && { commit: head, source: 'approve' as const }) });
+  if (moveBaseline && head) say(`Baseline set to ${head.slice(0, 7)} (HEAD): truthgate now checks tests, specs and config against this commit.`);
   return 0;
 }

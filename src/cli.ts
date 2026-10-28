@@ -114,9 +114,15 @@ async function init(root: string, args: ReturnType<typeof parseArgs>): Promise<n
       const ans = await p.ask(`Install a git pre-commit hook that runs \`truthgate verify\`? [${hookDefault ? 'Y/n' : 'y/N'}] `);
       if (ans) preCommit = /^y/i.test(ans);
     }
-    if (preCommit) changes.push(await installPreCommit(root));
+    const hook = preCommit ? await installPreCommit(root) : undefined;
+    if (hook) changes.push(hook);
 
-    for (const line of await applyChanges(root, changes, dryRun)) console.log(line);
+    const applied = await applyChanges(root, changes, dryRun);
+    for (const line of applied) console.log(line);
+    // applyChanges reports one line per change, in order. The gate exists if the hook was (or would
+    // be) written, or is already up to date; "skip … (exists and differs …)" means it is not there.
+    const hookLine = hook ? applied[changes.indexOf(hook)] : undefined;
+    const commitGate = !!hookLine && (!hookLine.startsWith('skip ') || hookLine.includes('(up to date)'));
 
     if (hypothesis) {
       const cmd = existsSync(join(root, 'uv.lock'))
@@ -134,7 +140,7 @@ async function init(root: string, args: ReturnType<typeof parseArgs>): Promise<n
     for (const a of agents) for (const s of installers[a].manualSteps ?? []) console.log(`${a}: ${s}`);
     if (instructOnly.length)
       console.log(
-        `${instructOnly.join(', ')}: instruct-only. No stop hook exists for ${instructOnly.length === 1 ? 'this agent' : 'these agents'}, so truthgate runs only when the agent follows its rules file${preCommit ? ' and at every commit (pre-commit hook)' : ''}.`,
+        `${instructOnly.join(', ')}: instruct-only. No stop hook exists for ${instructOnly.length === 1 ? 'this agent' : 'these agents'}, so truthgate runs only when the agent follows its rules file${commitGate ? ' and at every commit (pre-commit hook)' : ''}.`,
       );
     console.log(dryRun ? 'Dry run: nothing was written.' : 'Next: have the agent draft specs in .truthgate/specs/, then run `npx truthgate approve`.');
     return 0;

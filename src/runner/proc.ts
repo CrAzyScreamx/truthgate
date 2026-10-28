@@ -16,16 +16,30 @@ function needsShell(cmd: string): boolean {
 export function spawnTool(command: string[], opts: SpawnOptions = {}): ChildProcess {
   const [cmd, ...args] = command;
   if (!cmd) throw new Error('empty command');
+  // POSIX: own process group, so killTree reaches grandchildren (uv run -> python, go run -> binary).
+  const posixGroup = process.platform !== 'win32';
   if (needsShell(cmd)) return spawn([cmd, ...args].map(quote).join(' '), { ...opts, shell: true, windowsHide: true });
-  return spawn(cmd, args, { ...opts, windowsHide: true });
+  return spawn(cmd, args, { detached: posixGroup, ...opts, windowsHide: true });
 }
 
-/** Kill a process now. Shims are direct children (go/cargo shims are built, then run), so only a cmd.exe
- *  wrapper (.cmd tools on Windows) needs `taskkill /t`, which can take seconds there. */
+/** Kill a process and everything it started (launchers such as `uv run` or a custom `go run` leave grandchildren).
+ *  Windows (all seen live with `uv run python`): `taskkill /t` can take ~5 s, so callers don't await it, but it must
+ *  find the parent alive or the python under uv.exe is orphaned at full CPU. So the direct child is killed only after
+ *  taskkill exits, and the taskkill handle stays referenced: if this process exited first, libuv's kill-on-close job
+ *  would end uv.exe before the sweep (python escapes that job). Exit is delayed until the sweep ends. */
 export function killTree(child: ChildProcess): void {
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
-  if (process.platform === 'win32' && /cmd\.exe$/i.test(child.spawnfile)) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }).unref();
-  else child.kill('SIGKILL');
+  const pid = child.pid;
+  if (process.platform === 'win32') {
+    const tk = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+    tk.on('exit', () => child.kill('SIGKILL')).on('error', () => child.kill('SIGKILL'));
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
 }
 
 export interface ExecResult {

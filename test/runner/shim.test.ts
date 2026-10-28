@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -77,4 +77,38 @@ test('exec runs .cmd tools on Windows (npm) and reports failures', async () => {
   assert.match(r.stdout, /\d+\.\d+/);
   const bad = await exec(['truthgate-no-such-tool-xyz']);
   assert.notEqual(bad.code, 0);
+});
+
+test('killTree reaches a busy grandchild behind a launcher (uv run style)', { timeout: 60_000 }, async () => {
+  // node launcher -> node grandchild that speaks the protocol, then spins on "hang".
+  const pidFile = join(dir, 'grandchild.pid');
+  const grand = join(dir, 'grand.mjs');
+  writeFileSync(
+    grand,
+    `import { writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+createInterface({ input: process.stdin }).on('line', (l) => {
+  if (JSON.parse(l).fn === 'hang') for (;;) {}
+  console.log(JSON.stringify({ out: 1 }));
+});`,
+  );
+  const launcher = join(dir, 'launcher.mjs');
+  writeFileSync(launcher, `import { spawn } from 'node:child_process';\nspawn(process.execPath, [${JSON.stringify(grand)}], { stdio: 'inherit' });\nsetInterval(() => {}, 1e6);`);
+  const c = openShim([process.execPath, launcher], dir, { callTimeoutMs: 300 });
+  await c.call('echo', {});
+  const gpid = Number(readFileSync(pidFile, 'utf8'));
+  const alive = () => {
+    try {
+      process.kill(gpid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.ok(alive());
+  await assert.rejects(c.call('hang', {}), /timed out/);
+  await c.close();
+  for (let i = 0; i < 60 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
+  assert.equal(alive(), false, `grandchild ${gpid} still running`);
 });

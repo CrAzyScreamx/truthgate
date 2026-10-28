@@ -19,7 +19,7 @@ interface BaselineRecord {
   updatedAt: string;
 }
 
-const recordPath = async (root: string) => {
+export const recordPath = async (root: string) => {
   const key = createHash('sha256').update(await realpath(root)).digest('hex');
   return join(process.env.TRUTHGATE_HOME ?? join(homedir(), '.truthgate'), 'repos', `${key}.json`);
 };

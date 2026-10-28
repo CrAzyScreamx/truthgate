@@ -1,22 +1,24 @@
 // Stop-hook entry: parse the agent payload, run verify, apply the loop cap, render agent output.
-import type { AgentInstaller, Config, RunReport, State } from '../contract.ts';
+import type { AgentInstaller, Config, RunReport, Spec, State } from '../contract.ts';
 import { DEFAULT_CONFIG } from '../core/config.ts';
 import { cappedMessage, summarize } from './summary.ts';
 
 export interface HookDeps {
   verify(root: string, opts: { deep?: boolean; all?: boolean }): Promise<RunReport>;
   loadConfig(root: string): Promise<Config>;
+  loadSpecs(root: string): Promise<Spec[]>;
   readState(root: string): Promise<State>;
   writeState(root: string, s: State): Promise<void>;
 }
 
 async function defaultDeps(): Promise<HookDeps> {
-  const [{ verify }, { loadConfig }, { readState, writeState }] = await Promise.all([
+  const [{ verify }, { loadConfig }, { loadSpecs }, { readState, writeState }] = await Promise.all([
     import('../core/verify.ts'),
     import('../core/config.ts'),
+    import('../core/spec.ts'),
     import('../core/state.ts'),
   ]);
-  return { verify, loadConfig, readState, writeState };
+  return { verify, loadConfig, loadSpecs, readState, writeState };
 }
 
 /** Agents flag a stop that follows a hook-forced continuation (Claude/Codex/Gemini `stop_hook_active`,
@@ -29,9 +31,11 @@ const emptyReport = (blocking: boolean, warning: string): RunReport =>
   ({ verdicts: [], tamper: [], warnings: [warning], changedFiles: [], blocking, durationMs: 0 });
 
 /** Spec/config problems are under the agent's control (a bad spec or config.json), so they block
- *  like a failure instead of silently allowing the stop. Their messages name the `.truthgate/` file. */
+ *  like a failure instead of silently allowing the stop. Any error from loading specs/config counts
+ *  (even EISDIR, whose message names no file); from verify, a SpecError or a `.truthgate/` path does. */
 const isUserError = (e: unknown) =>
-  e instanceof Error && (e.name === 'SpecError' || e.message.startsWith('.truthgate/'));
+  e instanceof Error &&
+  (e.name === 'SpecError' || /\.truthgate[\\/]/.test(e.message) || /\.truthgate[\\/]/.test(String((e as NodeJS.ErrnoException).path ?? '')));
 
 const userErrorReport = (e: unknown) =>
   emptyReport(true, `truthgate could not run: ${(e as Error).message}. Fix the spec/config; do not delete approved specs.`);
@@ -56,11 +60,14 @@ export async function runHookWith(
     const state = await d.readState(root);
     let loopCap = DEFAULT_CONFIG.loopCap;
     let report: RunReport;
+    let loading = true;
     try {
       loopCap = (await d.loadConfig(root)).loopCap;
+      await d.loadSpecs(root);
+      loading = false;
       report = await d.verify(root, {});
     } catch (e) {
-      if (!isUserError(e)) throw e;
+      if (!loading && !isUserError(e)) throw e;
       report = userErrorReport(e);
     }
     let blocks = isFreshTurn(payload) ? 0 : state.consecutiveBlocks;

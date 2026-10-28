@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import fc from 'fast-check';
 import type { Config, Spec } from '../../src/contract.ts';
 import { arb, runSpec } from '../../src/runner/index.ts';
+import { exec } from '../../src/runner/proc.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'tg-runner-test-'));
 writeFileSync(
@@ -19,6 +20,7 @@ export const nullAbove = (x: number) => (x > 6 ? null : x * 2);
 export const typo = (x: number) => (x > 6 ? (null as any).v : x * 2);
 export const refuses = (x: number) => { if (x > 6) { const e = new Error('no'); e.name = 'Rejected'; throw e; } return x * 2; };
 export const spin = (_x: number) => { for (;;) {} };
+export const deep = (n: number): number => (n > 7 ? deep(n) : n);
 let failed = false;
 export const dieAfterFail = (x: number) => { if (failed) process.exit(1); if (x >= 5) { failed = true; return -1; } return x * 2; };
 export const sortInPlace = (xs: number[]) => xs.sort((a, b) => a - b);
@@ -132,6 +134,13 @@ test('TypeError is a crash; RangeError and errors named Rejected are rejected', 
   assert.match(r.detail, /inputs discarded/);
 });
 
+test('JS stack overflow (a RangeError) is a crash, not a rejection', async () => {
+  const v = await one(fnSpec('deep', 'out == x'));
+  assert.equal(v.kind, 'FALSIFIED', v.detail);
+  assert.deepEqual(v.counterexample, { x: 8 });
+  assert.match(v.detail, /call stack/i);
+});
+
 test('ensures ExprError (wrong-typed out) is FALSIFIED; requires ExprError is UNVERIFIED', async () => {
   const v = await one(fnSpec('nullAbove', 'out == x * 2 or out > x'));
   assert.equal(v.kind, 'FALSIFIED', v.detail);
@@ -226,4 +235,27 @@ def refuses(x):
   const r = await one(py('refuses'));
   assert.equal(r.kind, 'TESTED', r.detail);
   assert.match(r.detail, /inputs discarded/);
+});
+
+test('uv project: a hung python target behind `uv run` leaves no process behind (R2-N1)', { timeout: 120_000 }, async (t) => {
+  const uvRoot = mkdtempSync(join(tmpdir(), 'tg-uv-test-'));
+  writeFileSync(join(uvRoot, 'pyproject.toml'), '[project]\nname = "uvt"\nversion = "0.1.0"\nrequires-python = ">=3.8"\ndependencies = []\n');
+  const pidFile = join(uvRoot, 'pid.txt').replaceAll('\\', '/');
+  writeFileSync(join(uvRoot, 'm.py'), `import os\ndef spin(n):\n    open("${pidFile}", "w").write(str(os.getpid()))\n    while True:\n        pass\n`);
+  const lock = await exec(['uv', 'lock', '-q'], { cwd: uvRoot, timeoutMs: 60_000 });
+  if (lock.code !== 0) return t.skip(`uv unavailable: ${lock.error ?? lock.stderr.trim()}`);
+  const [v] = await runSpec(fnSpec('spin', 'out == x', { lang: 'python', target: 'm.py::spin' }), uvRoot, opts({ deadline: Date.now() + 3000 }));
+  assert.equal(v!.kind, 'UNVERIFIED');
+  assert.match(v!.detail, /timeout/);
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 120 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
+  assert.equal(alive(), false, `python ${pid} under uv run still running`);
 });

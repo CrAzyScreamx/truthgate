@@ -278,8 +278,45 @@ test('config-edited: config.json compared with the baseline', async () => {
   assert.deepEqual((await checkApprovals(root, [])).map((f) => f.rule), ['config-edited']);
   await rm(join(root, '.truthgate/config.json'));
   assert.deepEqual((await checkApprovals(root, [])).map((f) => f.rule), ['config-edited']);
-  // The user accepts the committed change by approving: the baseline moves to HEAD.
+  // The user accepts the committed change by approving and answering y: the baseline moves to HEAD.
   await put(root, '.truthgate/config.json', '{"budgetSeconds": 1}\n');
-  await runApprove(root, io('').io);
+  const a = io('y\n');
+  await runApprove(root, a.io);
+  assert.match(a.text(), /truthgate config changed: \.truthgate\/config\.json/);
   assert.deepEqual(await checkApprovals(root, []), []);
+});
+
+test('R1-N3: approve lists the tamper it would absorb and moves the baseline only on an explicit y', async () => {
+  const { readBaseline } = await import('../../src/core/baseline.ts');
+  const { commitOf } = await import('../../src/core/diff.ts');
+  const T = 'def test_a():\n    assert f(1) == 1\n    assert f(2) == 2\n';
+  const root = await repo({ '.truthgate/specs/s1.yaml': SPEC(1), 'tests/test_a.py': T });
+  await runApprove(root, io('y\n').io);
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'approve'], { cwd: root });
+  const base = (await readBaseline(root)).commit;
+  // The agent guts the test and commits it.
+  await put(root, 'tests/test_a.py', 'def test_a():\n    assert True\n');
+  execFileSync('git', ['commit', '-qam', 'gut', '--no-verify'], { cwd: root });
+  const rules = async () => (await detectTamper(root, await changedFiles(root, (await readBaseline(root)).commit))).map((f) => f.rule);
+  assert.deepEqual(await rules(), ['assert-removed', 'assert-removed']);
+
+  const no = io('n\n');
+  assert.equal(await runApprove(root, no.io), 0);
+  assert.match(no.text(), /assertions removed, changed or made constant: tests\/test_a\.py[\s\S]*Accept these changes as the new baseline\? \[y\/N\][\s\S]*Kept the baseline/);
+  assert.equal((await readBaseline(root)).commit, base);
+  assert.deepEqual(await rules(), ['assert-removed', 'assert-removed']);
+  const eof = io(''); // no answer counts as no
+  await runApprove(root, eof.io);
+  assert.equal((await readBaseline(root)).commit, base);
+
+  const yes = io('y\n');
+  await runApprove(root, yes.io);
+  assert.match(yes.text(), /Accepted\.[\s\S]*Baseline set to/);
+  assert.equal((await readBaseline(root)).commit, await commitOf(root, 'HEAD'));
+  assert.deepEqual(await rules(), []);
+  // Nothing to absorb: no question asked.
+  const quiet = io('');
+  await runApprove(root, quiet.io);
+  assert.doesNotMatch(quiet.text(), /Accept these changes/);
 });

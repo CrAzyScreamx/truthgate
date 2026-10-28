@@ -132,13 +132,35 @@ test('numbers compare with a relative tolerance', () => {
   assert.equal(ev('[true] == [1]'), false);
 });
 
+test('integers compare exactly (no tolerance)', () => {
+  assert.equal(ev('1000000000 == 1000000001'), false);
+  assert.equal(ev('1700000000000 == 1700000000999'), false);
+  assert.equal(ev('5000000000 < 5000000004'), true);
+  assert.equal(ev('out[0] < out[1]', { out: [5000000000, 5000000004] }), true);
+  assert.equal(ev('3 == 3.0000000001'), true); // one side is not an integer
+});
+
 test('one evaluate() is capped at 1e6 steps; separate calls do not accumulate', () => {
   assert.throws(() => ev('all(i in range(100000): all(j in range(100000): true))'), /too expensive/);
   assert.throws(() => ev('unique(range(2000))'), /too expensive/);
   assert.throws(() => ev('perm(range(1001), range(1001))'), /too expensive/);
-  const e = expr.parse('all(i in range(1000): all(j in range(998): true))');
+  const e = expr.parse('all(i in range(500): all(j in range(498): true))');
   assert.equal(expr.evaluate(e, {}), true);
   assert.equal(expr.evaluate(e, {}), true);
+});
+
+test('list-building helpers are charged by size, so big inner lists fail fast', () => {
+  const t0 = Date.now();
+  assert.throws(() => ev('all(i in range(3000): len(range(100000)) > 0)'), /too expensive/);
+  assert.ok(Date.now() - t0 < 1000, 'should fail fast');
+  for (const src of [
+    'all(i in range(20): len(sorted(xs)) > 0)',
+    'all(i in range(20): sum(xs) >= 0)',
+    'all(i in range(20): count(xs, 1) >= 0)',
+    'all(i in range(20): len(xs + xs) > 0)',
+    'all(i in range(20): len(keys(r)) > 0 and len(values(r)) > 0)',
+  ])
+    assert.throws(() => ev(src, { xs: Array.from({ length: 60000 }, () => 1), r: Object.fromEntries(Array.from({ length: 30000 }, (_, i) => [`k${i}`, i])) }), /too expensive/, src);
 });
 
 // Every sample is evaluated in JS and in Python; both must agree on the value, or both must fail.
@@ -192,7 +214,11 @@ const PARITY: [string, Record<string, unknown>][] = [
   ['count([0.1 + 0.2], 0.3) + len(sorted([0.3, 0.1 + 0.2, 0.2]))', {}],
   ['all(i in range(100000): all(j in range(100000): true))', {}],
   ['unique(range(2000))', {}],
-  ['all(i in range(1000): all(j in range(998): true))', {}],
+  ['all(i in range(500): all(j in range(498): true))', {}],
+  ['[1000000000 == 1000000001, 1700000000000 == 1700000000999, 5000000000 < 5000000004, 3 == 3.0000000001]', {}],
+  ['all(i in range(3000): len(range(100000)) > 0)', {}],
+  ['all(i in range(20): len(sorted(xs) + [1]) > 0)', { xs: Array.from({ length: 60000 }, () => 1) }],
+  ['len(keys(r)) + len(values(r)) + count(range(10), 1) + sum(range(10))', { r: { a: 1, b: 2 } }],
 ];
 
 test('toPython behaves identically under Python', (t) => {

@@ -94,11 +94,12 @@ export async function verify(
     durationMs: Date.now() - start,
     ...(deep && { deep }),
   };
-  // A fully clean run on a clean tree moves the baseline forward. UNVERIFIED also holds it back, so
-  // committing code whose check could not run never makes that code part of the baseline.
-  if (git && !report.blocking && !verdicts.some((v) => v.kind === 'UNVERIFIED') && !(await isDirty(root, OWN_FILES))) {
+  // A fully clean run on a clean tree moves an EXISTING baseline forward; only approve creates one
+  // (else deleting the record and running verify would launder the HEAD fallback). UNVERIFIED also
+  // holds it back, so committing code whose check could not run never becomes part of the baseline.
+  if (git && recorded && !report.blocking && !verdicts.some((v) => v.kind === 'UNVERIFIED') && !(await isDirty(root, OWN_FILES))) {
     const head = await commitOf(root, 'HEAD');
-    if (head && (head !== base || !recorded)) await writeBaseline(root, { commit: head, source: 'clean-run' });
+    if (head && head !== base) await writeBaseline(root, { commit: head, source: 'clean-run' });
   }
   await mkdir(join(root, '.truthgate'), { recursive: true });
   await writeFile(join(root, LAST_RUN_FILE), JSON.stringify(report, null, 2) + '\n');
