@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tgz
+.truthgate/last-run.json
+.truthgate/state.json
+fixtures/**/target/
+fixtures/**/bin/
+fixtures/**/obj/
+fixtures/**/build/
+fixtures/**/.gradle/
+fixtures/**/__pycache__/
+fixtures/**/.hypothesis/
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
