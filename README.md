@@ -8,7 +8,7 @@ them against the real code, and a stop hook keeps the agent working until nothin
 catches the agent weakening the checks instead of fixing the code.
 
 ```powershell
-npx truthgate init
+npx truthgate        # setup: this project or globally, then pick your agents
 ```
 
 Requires Node 22+ and git. Languages: Python, TypeScript, JavaScript, Java, C#, Go, Rust.
@@ -20,23 +20,34 @@ Requires Node 22+ and git. Languages: Python, TypeScript, JavaScript, Java, C#, 
 3. A counterexample (`FALSIFIED`) or a weakened test (`TAMPER`) blocks the stop and goes back to the agent, which fixes the **code**.
 4. You see the verdicts, and every spec the agent edited along the way.
 
-## Setup: `truthgate init`
+## Setup: `npx truthgate`
 
-Asks which agents to set up, then writes into the repo (never overwriting your files; JSON/TOML configs are merged):
+Run it in a terminal. It asks two things, then installs:
+
+1. **Where:** this project (files in the repo) or globally (your user-level agent config, every project).
+2. **Which agents:** pick from the list. Globally, the agents found in your home directory are preselected.
+
+For each agent it writes (never overwriting your files; JSON/TOML configs are merged):
 
 - **Skills**: how to write specs, how to write shims, how to act on verdicts.
 - **Commands**: `truthgate-verify` (check current changes) and `truthgate-review` (inventory existing code, write specs, verify everything).
 - **Rules** block in the agent's rules file (`CLAUDE.md`, `AGENTS.md`, ...).
 - **MCP server** config, so the agent can call truthgate as tools.
 - **Stop hook**, where the agent supports one.
-- Optionally a **git pre-commit hook** running `truthgate verify`.
+- For a project, optionally a **git pre-commit hook** running `truthgate verify`.
 
 | Agent | Enforcement |
 |---|---|
 | Claude Code, Codex, Gemini CLI, Copilot, Cursor | stop hook: the agent can't finish while something blocks |
 | Amp, Windsurf/Devin, OpenCode, Cline, Kiro | instruct-only: rules file, plus the pre-commit hook |
 
-Flags: `--agent <id>` (repeatable), `--yes`, `--dry-run`. Per-agent file paths: [docs/agents.md](docs/agents.md).
+Per-agent file paths: [docs/agents.md](docs/agents.md).
+
+**Global setup notes:**
+
+- The global stop hooks act only in git repos that have `.truthgate/specs/`, and stand aside in repos with their own project-level truthgate hook. Elsewhere they allow the stop silently.
+- The git pre-commit hook is never global (a global `core.hooksPath` would replace every repo's own hooks). Add it per repo by running `npx truthgate` there and picking "This project".
+- Some agents keep parts of their user config outside files (Cursor rules, Devin and Cline IDE MCP settings). Those are printed as manual steps. Codex asks you to trust a new hook in `/hooks`.
 
 ## Specs
 
@@ -129,12 +140,12 @@ npx truthgate accept                      # baseline = HEAD
 
 | Command | What it does |
 |---|---|
-| `init [--agent <id>...] [--yes] [--dry-run]` | Set up agents, skills, MCP and hooks |
+| *(none, in a terminal)* | Setup: this project or globally, then pick agents |
 | `verify [--all] [--deep] [--json] [--budget <s>]` | Run specs for changed files (`--all`: every spec), tamper checks. Exit 1 when blocking |
 | `accept` | Approve committed test/config changes: baseline = HEAD |
 | `status` | Specs, the baseline, and tamper findings / spec edits since it |
 | `shim <spec-id> [--force]` | Write the shim template for a spec |
-| `hook --agent <id>` | Stop-hook entry point (reads the agent's payload on stdin) |
+| `hook --agent <id> [--global]` | Stop-hook entry point (reads the agent's payload on stdin) |
 | `mcp` | MCP server on stdio: `verify`, `list_specs`, `spec_status`, `explain_verdict`, `shim_template` |
 
 `--deep` adds **mutation testing** (up to 5 small bugs planted in the changed lines of spec'd files, in a
@@ -165,7 +176,7 @@ Optional `.truthgate/config.json` (defaults shown). Changing it counts as tamper
 }
 ```
 
-- `python.native`: run Python function specs with Hypothesis in-process instead of the shim (`init` offers to set it up).
+- `python.native`: run Python function specs with Hypothesis in-process instead of the shim (setup offers to add it).
 - `provers`: `{ "rocq": "<dir or exe>", "dafny": "<dir or exe>" }` for `--deep` proof audits.
 - `sourceGlobs`: which changed files get an `UNVERIFIED (no spec)` warning.
 

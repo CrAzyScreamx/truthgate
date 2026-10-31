@@ -7,11 +7,11 @@ const assets = fileURLToPath(new URL('../../assets/', import.meta.url));
 export const SKILLS = ['truthgate-spec', 'truthgate-shim', 'truthgate-verdicts'];
 export const COMMANDS = ['truthgate-verify', 'truthgate-review'];
 
-export const hookCommand = (id: AgentId) => `npx -y truthgate hook --agent ${id}`;
+export const hookCommand = (id: AgentId, global = false) => `npx -y truthgate hook --agent ${id}${global ? ' --global' : ''}`;
 
 const mcpArgs = ['-y', 'truthgate', 'mcp'];
 // ponytail: agents spawn MCP servers without a shell, and npx is npx.cmd on Windows, so wrap it
-// in cmd /c there. The written config is per-machine; teammates on other OSes rerun init.
+// in cmd /c there. The written config is per-machine; teammates on other OSes rerun setup.
 export const mcp: { command: string; args: string[] } =
   process.platform === 'win32' ? { command: 'cmd', args: ['/c', 'npx', ...mcpArgs] } : { command: 'npx', args: mcpArgs };
 
@@ -26,11 +26,17 @@ This repo checks agent-written code against property specs with truthgate.
 - Report verdicts exactly as worded: TESTED is not "proven", and UNVERIFIED is not a pass.
 `;
 
+/** User-scope rules (every project): the same contract, not worded as one repo's. */
+export const GLOBAL_RULES = RULES.replace(
+  'This repo checks agent-written code against property specs with truthgate.',
+  'truthgate checks agent-written code against property specs. In git repos:',
+);
+
 /** Rules as an appended block in a shared file, or as our own file when `frontmatter` is given. */
-export function rules(path: string, frontmatter?: string): FileChange {
+export function rules(path: string, frontmatter?: string, text = RULES): FileChange {
   return frontmatter === undefined
-    ? { path, action: 'append-block', content: RULES }
-    : { path, action: 'create', content: `---\n${frontmatter}\n---\n\n${RULES}` };
+    ? { path, action: 'append-block', content: text }
+    : { path, action: 'create', content: `---\n${frontmatter}\n---\n\n${text}` };
 }
 
 export async function skills(dir: string): Promise<FileChange[]> {

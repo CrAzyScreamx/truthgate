@@ -259,6 +259,15 @@ export interface AgentInstaller {
   plan(root: string): Promise<FileChange[]>;
   /** Manual steps to print (e.g. user-scope MCP config we refuse to edit). */
   manualSteps?: string[];
+  /** Project file holding this agent's truthgate stop hook; the global hook defers to it when present. */
+  hookFile?: string;
+  /** Global setup: changes relative to the home directory, applying to every project. */
+  globalPlan?(): Promise<FileChange[]>;
+  /** Home-relative dir whose existence means the agent is installed (global auto-detect). */
+  homeDir?: string;
+  globalManualSteps?: string[];
+  /** Global setup: commands for config the agent's own CLI owns (e.g. `claude mcp add --scope user`). */
+  globalExec?: string[][];
   /** Translate a report into this agent's stop-hook output. `capped` = loop cap reached (allow the stop). */
   hookOutput?(report: RunReport, capped: boolean): { stdout: string; exitCode: number };
 }

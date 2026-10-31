@@ -1,16 +1,16 @@
 # Agent integrations
 
-`npx truthgate init` asks which agents to set up (or pass `--agent <id>`, repeatable), then merges these files into the repo. It never overwrites a different file and never removes your keys. It is idempotent, and `--dry-run` prints the plan without writing.
+`npx truthgate` asks whether to set up this project or globally, then which agents, then merges these files into the repo (or the home directory, below). It never overwrites a different file and never removes your keys. It is idempotent.
 Facts below were checked against each vendor's official docs on 2026-10-28. **UNCONFIRMED** marks anything the docs did not state clearly.
 
 Commands written into configs:
-- **MCP:** `npx -y truthgate mcp`. On Windows this becomes `cmd /c npx -y truthgate mcp`, because agents spawn MCP servers without a shell and `npx` is `npx.cmd`. The written config is per-machine, so teammates on another OS rerun `init`.
+- **MCP:** `npx -y truthgate mcp`. On Windows this becomes `cmd /c npx -y truthgate mcp`, because agents spawn MCP servers without a shell and `npx` is `npx.cmd`. The written config is per-machine, so teammates on another OS rerun setup.
 - **Stop hook:** `npx -y truthgate hook --agent <id>`.
 
 Merge rules:
 - **JSON:** objects are deep-merged, and missing array items are appended.
-- **An existing `truthgate` entry is yours.** It is never merged into: our args are not spliced into your command. `init` prints "kept your existing … merge by hand".
-- **TOML:** only ever appended to, so comments and layout survive. If our tables would overlap yours, `init` skips the file and prints the block to merge by hand.
+- **An existing `truthgate` entry is yours.** It is never merged into: our args are not spliced into your command. setup prints "kept your existing … merge by hand".
+- **TOML:** only ever appended to, so comments and layout survive. If our tables would overlap yours, setup skips the file and prints the block to merge by hand.
 
 **Gemini CLI → Antigravity CLI:** since 2026-06-18, geminicli.com carries a banner saying Gemini CLI has been replaced by Antigravity CLI. The `gemini` installer targets the documented `.gemini/` layout. Whether Antigravity CLI reads the same paths is **UNCONFIRMED**.
 
@@ -49,7 +49,7 @@ The skills are copied from `assets/skills/` (`truthgate-spec`, `truthgate-shim` 
 
 Agents' own continuation caps: Claude and Copilot CLI stop after 8 consecutive blocks, Cursor after `loop_limit` (5). All are above truthgate's cap of 3.
 
-## Trust and approval prompts (printed by `init`)
+## Trust and approval prompts (printed by setup)
 - **Claude:** interactive sessions ask before starting project `.mcp.json` servers.
 - **Codex:** project `.codex/config.toml` and hooks load only for trusted projects. New hooks must be reviewed with `/hooks`.
 - **Gemini:** changed project hooks show a warning before they run. Whether hooks are on by default is **UNCONFIRMED**.
@@ -58,15 +58,15 @@ Agents' own continuation caps: Claude and Copilot CLI stop after 8 consecutive b
 - **Copilot cloud agent:** MCP servers are configured only in the repo settings UI, not in a file.
 
 ## Instruct-only agents and why
-These get skills, MCP (where a project file exists) and rules that tell the agent to run `verify` before finishing. `init` offers the git pre-commit hook for them, and the default answer is yes.
+These get skills, MCP (where a project file exists) and rules that tell the agent to run `verify` before finishing. Setup offers the git pre-commit hook for them, and the default answer is yes.
 - **Amp:** a plugin (`.amp/plugins/*.ts`, the `agent.end` event returning `{action:'continue'}`) could force a continue. v0.1 ships no plugin. The `agent.end` payload fields are **UNCONFIRMED**.
-- **Windsurf / Devin:** the `.devin/hooks.json` `post_cascade_response` hook runs async and the docs say post-hooks cannot block. MCP is user-scope only (`%APPDATA%\devin\mcp_config.json`, or `~/.config/devin/mcp_config.json`), so `init` prints the snippet. Whether the legacy `~/.codeium/windsurf/mcp_config.json` is still read is **UNCONFIRMED**. Workflow frontmatter is **UNCONFIRMED**; ours carries only `description`.
+- **Windsurf / Devin:** the `.devin/hooks.json` `post_cascade_response` hook runs async and the docs say post-hooks cannot block. MCP is user-scope only (`%APPDATA%\devin\mcp_config.json`, or `~/.config/devin/mcp_config.json`), so setup prints the snippet. Whether the legacy `~/.codeium/windsurf/mcp_config.json` is still read is **UNCONFIRMED**. Workflow frontmatter is **UNCONFIRMED**; ours carries only `description`.
 - **OpenCode:** plugins see `session.idle` but there is no documented way to block. Forcing a continue via the SDK prompt API is undocumented.
-- **Cline:** the hooks docs now redirect to SDK plugins. `afterRun` cannot block, and the file-based `TaskComplete` hook is **UNCONFIRMED**. MCP is global only, so `init` prints the snippet. The workflow format is **UNCONFIRMED**, so no commands are installed.
+- **Cline:** the hooks docs now redirect to SDK plugins. `afterRun` cannot block, and the file-based `TaskComplete` hook is **UNCONFIRMED**. MCP is global only, so setup prints the snippet. The workflow format is **UNCONFIRMED**, so no commands are installed.
 - **Kiro:** has a `Stop` hook (`.kiro/hooks/*.json`), but the docs conflict on how to block it (exit 1 vs exit 0 with `{"decision":"block"}`), so it is **UNCONFIRMED** and not installed. The prompt-file format (`.kiro/prompts/`) is **UNCONFIRMED**, so no commands are installed.
 
 ## Pre-commit hook
-`init` offers it as opt-in. It writes a `# truthgate:begin … # truthgate:end` block containing `npx -y truthgate verify || exit 1`, with LF line endings, into the directory from `git rev-parse --git-path hooks`. That respects `core.hooksPath` and worktrees. An existing hook is kept. When it is sh-family (sh, bash, zsh or dash) or has no shebang, the block goes right after its shebang so a trailing `exit` can't skip it. A hook in another language, such as a Python or Node shebang, is left untouched, and `init` prints the line to add by hand.
+Setup offers it as opt-in. It writes a `# truthgate:begin … # truthgate:end` block containing `npx -y truthgate verify || exit 1`, with LF line endings, into the directory from `git rev-parse --git-path hooks`. That respects `core.hooksPath` and worktrees. An existing hook is kept. When it is sh-family (sh, bash, zsh or dash) or has no shebang, the block goes right after its shebang so a trailing `exit` can't skip it. A hook in another language, such as a Python or Node shebang, is left untouched, and setup prints the line to add by hand.
 
 ## Sources
 - Claude: code.claude.com/docs/en/skills, /mcp, /memory, /hooks
@@ -79,3 +79,22 @@ These get skills, MCP (where a project file exists) and rules that tell the agen
 - OpenCode: opencode.ai/docs/skills/, /mcp-servers/, /rules/, /commands/, /plugins/
 - Cline: docs.cline.bot/features/skills, /mcp/configuring-mcp-servers, /features/cline-rules, /sdk/plugins.md
 - Kiro: kiro.dev/docs/skills/, /mcp/configuration/, /steering/, /hooks/, /cli/v3/hooks-migration/
+
+## Global (user-scope) install
+
+Picking "Globally" in `npx truthgate` writes these paths under the home directory. Checked against vendor docs on 2026-10-31. Agents are auto-detected by the home dir in the last column. Hooks are written with `--global`. A global hook resolves the project from the payload `cwd` (or Cursor's `workspace_roots`, whose global hooks run from `~/.cursor`). It acts only in a git repo with `.truthgate/specs/` and no project-level truthgate hook for that agent.
+
+| Agent | Skills | MCP | Rules | Commands | Stop hook | Detected by |
+|---|---|---|---|---|---|---|
+| Claude Code | `~/.claude/skills/` | `claude mcp add --scope user` (`~/.claude.json` is Claude's own state file) | `~/.claude/CLAUDE.md` block | `~/.claude/commands/` | `~/.claude/settings.json` `hooks.Stop` | `~/.claude` |
+| Codex | `~/.agents/skills/` | `~/.codex/config.toml` | `~/.codex/AGENTS.md` block | none (prompts are deprecated) | `~/.codex/hooks.json` (trust it in `/hooks`) | `~/.codex` |
+| Gemini CLI | `~/.gemini/skills/` | `~/.gemini/settings.json` | `~/.gemini/GEMINI.md` block | `~/.gemini/commands/` | `~/.gemini/settings.json` `hooks.AfterAgent` | `~/.gemini` |
+| Copilot | `~/.copilot/skills/` | `~/.copilot/mcp-config.json` (CLI; VS Code "Global") | `~/.copilot/copilot-instructions.md` block | none (user path **UNCONFIRMED**) | `~/.copilot/hooks/truthgate.json` `agentStop` | `~/.copilot` |
+| Cursor | `~/.cursor/skills/` | `~/.cursor/mcp.json` | UI only, printed | none (**UNCONFIRMED**) | `~/.cursor/hooks.json` `stop` | `~/.cursor` |
+| Amp | `~/.config/agents/skills/` | `~/.config/amp/settings.json` | `~/.config/amp/AGENTS.md` block | none | instruct-only | `~/.config/amp` |
+| Windsurf / Devin | `~/.config/devin/skills/` | printed (the docs give two different files) | `~/.devin/global_rules.md` block | `~/.codeium/windsurf/global_workflows/` | instruct-only | `~/.codeium/windsurf` |
+| OpenCode | `~/.config/opencode/skills/` | `~/.config/opencode/opencode.json` | `~/.config/opencode/AGENTS.md` block | `~/.config/opencode/commands/` | instruct-only | `~/.config/opencode` |
+| Cline | `~/.cline/skills/` | `~/.cline/data/settings/cline_mcp_settings.json` (CLI); IDE printed | `~/.cline/rules/truthgate.md` | none | instruct-only | `~/.cline` |
+| Kiro | `~/.kiro/skills/` | `~/.kiro/settings/mcp.json` | `~/.kiro/steering/truthgate.md` | none | instruct-only (Stop blocking **UNCONFIRMED**) | `~/.kiro` |
+
+The pre-commit hook is never installed globally: `git config --global core.hooksPath` would replace every repo's own hooks.

@@ -1,5 +1,9 @@
 // Stop-hook entry: parse the agent payload, run verify, apply the loop cap, render agent output.
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { AgentInstaller, Config, RunReport, Spec, State } from '../contract.ts';
+import { git } from '../core/diff.ts';
 import { DEFAULT_CONFIG } from '../core/config.ts';
 import { cappedMessage, specEditMessage, summarize } from './summary.ts';
 
@@ -40,11 +44,22 @@ const isUserError = (e: unknown) =>
 const userErrorReport = (e: unknown) =>
   emptyReport(true, `truthgate could not run: ${(e as Error).message}. Fix the spec/config; do not delete specs to get past this.`);
 
+/** A global (user-scope) hook fires in every project. It acts only in a git repo that uses truthgate
+ *  (has `.truthgate/specs/`) and has no project-level truthgate hook for this agent (that one runs instead).
+ *  Returns the repo root to verify, or undefined to allow the stop silently. */
+export async function globalRoot(installer: AgentInstaller, cwd: string): Promise<string | undefined> {
+  const top = (await git(cwd, ['rev-parse', '--show-toplevel']).catch(() => '')).trim();
+  if (!top || !existsSync(join(top, '.truthgate', 'specs'))) return undefined;
+  const own = installer.hookFile ? await readFile(join(top, installer.hookFile), 'utf8').catch(() => '') : '';
+  return own.includes('truthgate hook') ? undefined : top;
+}
+
 export async function runHookWith(
   installer: AgentInstaller,
   stdin: string,
   root: string,
   deps?: HookDeps,
+  global = false,
 ): Promise<{ stdout: string; exitCode: number }> {
   const log = console.log;
   console.log = console.error; // stdout is the agent protocol; keep stray logs out of it
@@ -55,6 +70,16 @@ export async function runHookWith(
       if (p && typeof p === 'object' && !Array.isArray(p)) payload = p as Record<string, unknown>;
     } catch {
       // unknown/empty payload: still verify
+    }
+    if (global) {
+      // Project dir: payload cwd (Claude, Codex, Gemini, Copilot), Cursor's workspace_roots (its global hooks
+      // run from ~/.cursor), the agent's env var, else our own cwd.
+      const roots = Array.isArray(payload.workspace_roots) ? payload.workspace_roots : [];
+      const cwd = [payload.cwd, roots[0], process.env.CLAUDE_PROJECT_DIR, process.env.GEMINI_PROJECT_DIR]
+        .find((p): p is string => typeof p === 'string' && existsSync(p)) ?? root;
+      const top = await globalRoot(installer, cwd);
+      if (!top) return output(installer, { ...emptyReport(false, ''), warnings: [] }, false);
+      root = top;
     }
     const d = deps ?? (await defaultDeps());
     const state = await d.readState(root);

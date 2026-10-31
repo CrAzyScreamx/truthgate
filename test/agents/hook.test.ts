@@ -125,3 +125,19 @@ test('stray console.log during verify does not reach the returned stdout', async
   const r = await runHookWith(installers.gemini, '{}', '.', noisy);
   assert.equal(r.stdout, '{"decision":"allow"}\n');
 });
+
+test('global hook acts only in repos with specs and no project-level truthgate hook', async () => {
+  const { repo } = await import('../core/helpers.ts');
+  const { globalRoot } = await import('../../src/agents/hook.ts');
+  const { realpath } = await import('node:fs/promises');
+  const plain = await repo({ 'a.py': 'x = 1\n' });
+  assert.equal(await globalRoot(claude, plain), undefined);
+  const used = await repo({ '.truthgate/specs/a.yaml': 'id: a\n', 'src/a.py': 'x = 1\n' });
+  assert.equal(await realpath((await globalRoot(claude, join(used, 'src')))!), await realpath(used)); // from a subdir too
+  const both = await repo({ '.truthgate/specs/a.yaml': 'id: a\n', '.claude/settings.json': '{"hooks":{"Stop":[{"hooks":[{"command":"npx -y truthgate hook --agent claude"}]}]}}' });
+  assert.equal(await globalRoot(claude, both), undefined);
+  assert.equal(await globalRoot(claude, tmpdir()), undefined); // not a git repo
+  // A skipped global stop is a silent allow, never a block.
+  const { d } = deps([true]);
+  assert.equal((await runHookWith(claude, JSON.stringify({ cwd: plain }), plain, d, true)).stdout, '');
+});

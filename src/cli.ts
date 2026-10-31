@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as clack from '@clack/prompts';
-import type { AgentId, FileChange, Spec } from './contract.ts';
+import type { AgentId, Spec } from './contract.ts';
 import { CONFIG_FILE } from './core/config.ts';
 import { loadSpecs, SpecError } from './core/spec.ts';
 import { readBaseline, writeBaseline } from './core/baseline.ts';
@@ -13,18 +13,18 @@ import { checkConfig, detectTamper, specChanges } from './core/tamper.ts';
 import { OWN_FILES, verify } from './core/verify.ts';
 import { formatReport } from './core/report.ts';
 
-const USAGE = `usage: truthgate <command>
-  init [--agent <id>...] [--yes] [--dry-run]   set up agents, skills, MCP and hooks
+const USAGE = `usage: truthgate [command]
+  (none, in a terminal)                        set up: this project or globally, then pick agents
   verify [--deep] [--all] [--json] [--budget <s>]
   accept                                       accept intentional test/config changes (baseline = HEAD)
   status                                       list specs, the baseline, and changes since it
   shim <spec-id> [--force]                     write the shim template for a spec
-  hook --agent <id>                            stop-hook entry point (reads stdin)
+  hook --agent <id> [--global]                 stop-hook entry point (reads stdin)
   mcp                                          MCP server on stdio`;
 
 const AGENTS: AgentId[] = ['claude', 'codex', 'gemini', 'copilot', 'cursor', 'amp', 'windsurf', 'opencode', 'cline', 'kiro'];
 const VALUE_FLAGS = new Set(['agent', 'budget']);
-const BOOL_FLAGS = new Set(['yes', 'dry-run', 'deep', 'all', 'json', 'force', 'help']);
+const BOOL_FLAGS = new Set(['deep', 'all', 'json', 'force', 'help', 'global']);
 
 class UsageError extends Error {}
 
@@ -51,121 +51,36 @@ function parseArgs(argv: string[]) {
 
 class Cancelled extends Error {}
 
-/** Unwrap a clack prompt result; Esc / Ctrl+C aborts init. */
+/** Unwrap a clack prompt result; Esc / Ctrl+C aborts setup. */
 async function answer<T>(r: Promise<T>): Promise<Exclude<T, symbol>> {
   const v = await r;
   if (clack.isCancel(v)) throw new Cancelled();
   return v as Exclude<T, symbol>;
 }
 
-/** `--flag a,b --flag c` → ['a','b','c'], lowercased. */
-const listFlag = (v: string[] | undefined) => (v ?? []).flatMap((a) => a.split(',')).map((a) => a.trim().toLowerCase()).filter(Boolean);
-
-const PY_MARKERS = new Set(['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile']);
-
-/** A Python project (a packaging/requirements file), not just stray scripts in another stack's repo. */
-async function hasPythonProject(dir: string, depth = 0): Promise<boolean> {
-  if (depth > 6) return false;
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  for (const e of entries) if (e.isFile() && PY_MARKERS.has(e.name)) return true;
-  for (const e of entries)
-    if (e.isDirectory() && !e.name.startsWith('.') && !['node_modules', 'venv', 'target', 'dist', 'build'].includes(e.name) && (await hasPythonProject(join(dir, e.name), depth + 1)))
-      return true;
-  return false;
-}
-
-/** Install command for Hypothesis as a project dev dependency: uv, or the project's .venv. Never the system Python. */
-async function hypothesisInstall(root: string): Promise<string[] | undefined> {
-  if (existsSync(join(root, 'uv.lock'))) return ['uv', 'add', '--dev', 'hypothesis'];
-  const py = (await import('./lang/python/adapter.ts')).pythonCmd(root);
-  return ['python', 'python3'].includes(py[0]!) ? undefined : [...py, '-m', 'pip', 'install', 'hypothesis'];
-}
-
-/** Only called to turn the native path on: false is the default, so writing it would just be a config change to commit. */
-async function enablePythonNative(root: string) {
-  const file = join(root, CONFIG_FILE);
-  const cfg = existsSync(file) ? JSON.parse(await readFile(file, 'utf8')) : {};
-  cfg.python = { ...cfg.python, native: true };
-  await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(cfg, null, 2) + '\n');
-}
-
-async function init(root: string, args: ReturnType<typeof parseArgs>): Promise<number> {
-  const { installers, applyChanges, installPreCommit } = await import('./agents/index.ts');
-  const yes = args.has('yes');
-  const dryRun = args.has('dry-run');
-  const tty = !!process.stdin.isTTY && !!process.stdout.isTTY;
-  if (tty) clack.intro(' truthgate ');
+/** Bare `truthgate` in a terminal: where (this project / every project), which agents, then install. */
+async function setup(root: string): Promise<number> {
+  const { setupProject, setupGlobal, globalAgents } = await import('./setup.ts');
+  const { installers } = await import('./agents/index.ts');
+  clack.intro(' truthgate ');
   try {
-    let ids = listFlag(args.flags.agent);
-    if (ids.length === 0) {
-      if (!tty) throw new UsageError('no TTY to ask which agents: pass --agent <id> (repeatable). Agents: ' + AGENTS.join(', '));
-      ids = await answer(clack.multiselect({
-        message: 'Which coding agents should truthgate set up?',
-        options: AGENTS.map((a) => ({ value: a, label: a, hint: installers[a].enforces ? 'stop hook' : 'instruct-only' })),
-      }));
-    }
-    const bad = ids.filter((a) => !AGENTS.includes(a as AgentId));
-    if (bad.length) throw new UsageError(`unknown agent ${bad.join(', ')}. Agents: ${AGENTS.join(', ')}`);
-    const agents = [...new Set(ids)] as AgentId[];
-
-    const changes: FileChange[] = [{ path: '.truthgate/.gitignore', action: 'create', content: 'state.json\nlast-run.json\n' }];
-    for (const a of agents) changes.push(...(await installers[a].plan(root)));
-
-    let hypothesis = false;
-    const install = (await hasPythonProject(root)) ? ((await hypothesisInstall(root)) ?? null) : undefined;
-    if (install) {
-      hypothesis = yes || (tty && (await answer(clack.confirm({ message: `Python project found. Add Hypothesis as a dev dependency (\`${install.join(' ')}\`) for native property tests?` }))));
-      if (!yes && !tty) console.log('Python project found: rerun with --yes to add Hypothesis (native path); using the shim for now.');
-    } else if (install === null)
-      console.log(
-        `Python project found, but no uv.lock or .venv to add Hypothesis to, so Python specs use the shim. For the native path, install hypothesis in the project's environment, set "python": {"native": true} in ${CONFIG_FILE} and commit it.`,
-      );
-    const instructOnly = agents.filter((a) => !installers[a].enforces);
-    const hookDefault = instructOnly.length > 0;
-    const preCommit = tty && !yes
-      ? await answer(clack.confirm({ message: 'Install a git pre-commit hook that runs `truthgate verify`?', initialValue: hookDefault }))
-      : hookDefault;
-    const hook = preCommit ? await installPreCommit(root) : undefined;
-    if (hook) changes.push(hook);
-
-    const applied = await applyChanges(root, changes, dryRun);
-    for (const line of applied) console.log(line);
-    // applyChanges reports one line per change, in order. The gate exists if the hook was (or would
-    // be) written, or is already up to date; "skip … (exists and differs …)" means it is not there.
-    const hookLine = hook ? applied[changes.indexOf(hook)] : undefined;
-    const commitGate = !!hookLine && (!hookLine.startsWith('skip ') || hookLine.includes('(up to date)'));
-
-    // verify reports any config change that isn't committed as tampering, so say so whenever we write it.
-    const commitConfig = `commit ${CONFIG_FILE}, then run \`npx truthgate accept\` (verify reports config changes since the baseline as tampering)`;
-    if (hypothesis && install) {
-      if (dryRun) console.log(`would run: ${install.join(' ')}, then set python.native in ${CONFIG_FILE}; ${commitConfig}`);
-      else {
-        console.log(`running: ${install.join(' ')}`);
-        const r = spawnSync(install[0]!, install.slice(1), { cwd: root, stdio: 'inherit' });
-        if (r.status !== 0) console.log('Hypothesis install failed; Python specs will use the shim path.');
-        else {
-          await enablePythonNative(root);
-          console.log(`Set python.native in ${CONFIG_FILE}: ${commitConfig}.`);
-        }
-      }
-    }
-    // Pin the baseline now: if the first verify recorded it, an agent's commits before that run would be in it.
-    if (!dryRun) {
-      const b = await readBaseline(root).catch((e) => (e instanceof NotGitError ? undefined : Promise.reject(e)));
-      if (b?.source === 'head' && b.commit) {
-        await writeBaseline(root, { commit: b.commit, source: 'auto' });
-        console.log(`Recorded the truthgate baseline at ${b.commit.slice(0, 7)} (HEAD): tests and config are checked against it.`);
-      }
-    }
-    for (const a of agents) for (const s of installers[a].manualSteps ?? []) console.log(`${a}: ${s}`);
-    if (instructOnly.length)
-      console.log(
-        `${instructOnly.join(', ')}: instruct-only. No stop hook exists for ${instructOnly.length === 1 ? 'this agent' : 'these agents'}, so truthgate runs only when the agent follows its rules file${commitGate ? ' and at every commit (pre-commit hook)' : ''}.`,
-      );
-    const done = dryRun ? 'Dry run: nothing was written.' : 'Next: have the agent write specs in .truthgate/specs/ for the code it changes; `npx truthgate verify` checks them. To spec and check existing code, run the truthgate-review command in your agent.';
-    if (tty) clack.outro(done);
-    else console.log(done);
+    const scope = await answer(clack.select({
+      message: 'Where should truthgate be set up?',
+      options: [
+        { value: 'project', label: 'This project', hint: root },
+        { value: 'global', label: 'Globally', hint: 'every project, in your user-level agent config' },
+      ],
+    }));
+    const home = homedir();
+    const { supported, detected } = globalAgents(home);
+    const choices = scope === 'global' ? supported : AGENTS;
+    const agents = await answer(clack.multiselect<AgentId>({
+      message: 'Which coding agents should truthgate set up?',
+      options: choices.map((a) => ({ value: a, label: a, hint: installers[a].enforces ? 'stop hook' : 'instruct-only' })),
+      initialValues: scope === 'global' ? detected : [],
+    }));
+    const io = { log: (s: string) => console.log(s), confirm: (message: string, initialValue: boolean) => answer(clack.confirm({ message, initialValue })) };
+    clack.outro(scope === 'global' ? await setupGlobal(home, agents, io) : await setupProject(root, agents, io));
     return 0;
   } catch (e) {
     if (!(e instanceof Cancelled)) throw e;
@@ -252,13 +167,13 @@ async function main(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
   const cmd = args.pos[0];
   const root = process.cwd();
+  // Bare `truthgate` / `npx truthgate` in a terminal is setup: one step from nothing to configured.
+  if (!cmd && !args.has('help') && process.stdin.isTTY && process.stdout.isTTY) return setup(root);
   if (args.has('help') || !cmd) {
     console.log(USAGE);
     return cmd || args.has('help') ? 0 : 2;
   }
   switch (cmd) {
-    case 'init':
-      return init(root, args);
     case 'verify': {
       const budget = args.flags.budget?.at(-1);
       const budgetSeconds = budget === undefined ? undefined : Number(budget);
@@ -277,7 +192,7 @@ async function main(argv: string[]): Promise<number> {
       const agent = args.flags.agent?.[0] as AgentId | undefined;
       if (!agent || !AGENTS.includes(agent)) throw new UsageError(`hook needs --agent <${AGENTS.join('|')}>`);
       const { runHook } = await import('./agents/index.ts');
-      const r = await runHook(agent, await readStdin(), root);
+      const r = await runHook(agent, await readStdin(), root, args.has('global'));
       process.stdout.write(r.stdout);
       return r.exitCode;
     }

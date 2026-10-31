@@ -18,6 +18,6 @@ export const installers: Record<AgentId, AgentInstaller> = {
   claude, codex, gemini, copilot, cursor, amp, windsurf, opencode, cline, kiro,
 };
 
-export function runHook(agent: AgentId, stdin: string, root: string): Promise<{ stdout: string; exitCode: number }> {
-  return runHookWith(installers[agent], stdin, root);
+export function runHook(agent: AgentId, stdin: string, root: string, global = false): Promise<{ stdout: string; exitCode: number }> {
+  return runHookWith(installers[agent], stdin, root, undefined, global);
 }

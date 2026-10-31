@@ -1,11 +1,12 @@
 import { stringify } from 'smol-toml';
 import type { AgentInstaller } from '../contract.ts';
-import { decisionOutput, hookCommand, json, mcp, rules, skills } from './common.ts';
+import { decisionOutput, hookCommand, json, mcp, rules, skills, GLOBAL_RULES } from './common.ts';
 import { blockReason, cappedMessage, specEditMessage } from './summary.ts';
 
 export const codex: AgentInstaller = {
   id: 'codex',
   enforces: true,
+  hookFile: '.codex/hooks.json',
   async plan() {
     const hook = hookCommand('codex');
     return [
@@ -29,4 +30,20 @@ export const codex: AgentInstaller = {
     const edits = specEditMessage(report);
     return { stdout: edits ? JSON.stringify({ systemMessage: edits }) + '\n' : '', exitCode: 0 };
   },
+  homeDir: '.codex',
+  async globalPlan() {
+    const hook = hookCommand('codex', true);
+    return [
+      ...(await skills('.agents/skills')),
+      { path: '.codex/config.toml', action: 'merge', content: stringify({ mcp_servers: { truthgate: mcp } }) + '\n' },
+      rules('.codex/AGENTS.md', undefined, GLOBAL_RULES),
+      {
+        path: '.codex/hooks.json',
+        action: 'merge',
+        content: json({ hooks: { Stop: [{ hooks: [{ type: 'command', command: hook, commandWindows: `cmd /c ${hook}`, timeout: 300 }] }] } }),
+        note: 'global Stop hook',
+      },
+    ];
+  },
+  globalManualSteps: ['Codex runs a new hook only after you trust it: open Codex and review the truthgate hook with /hooks.'],
 };
