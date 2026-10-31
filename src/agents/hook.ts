@@ -1,7 +1,7 @@
 // Stop-hook entry: parse the agent payload, run verify, apply the loop cap, render agent output.
 import type { AgentInstaller, Config, RunReport, Spec, State } from '../contract.ts';
 import { DEFAULT_CONFIG } from '../core/config.ts';
-import { cappedMessage, summarize } from './summary.ts';
+import { cappedMessage, specEditMessage, summarize } from './summary.ts';
 
 export interface HookDeps {
   verify(root: string, opts: { deep?: boolean; all?: boolean }): Promise<RunReport>;
@@ -28,7 +28,7 @@ function isFreshTurn(payload: Record<string, unknown>): boolean {
 }
 
 const emptyReport = (blocking: boolean, warning: string): RunReport =>
-  ({ verdicts: [], tamper: [], warnings: [warning], changedFiles: [], blocking, durationMs: 0 });
+  ({ verdicts: [], tamper: [], warnings: [warning], specChanges: [], changedFiles: [], blocking, durationMs: 0 });
 
 /** Spec/config problems are under the agent's control (a bad spec or config.json), so they block
  *  like a failure instead of silently allowing the stop. Any error from loading specs/config counts
@@ -38,7 +38,7 @@ const isUserError = (e: unknown) =>
   (e.name === 'SpecError' || /\.truthgate[\\/]/.test(e.message) || /\.truthgate[\\/]/.test(String((e as NodeJS.ErrnoException).path ?? '')));
 
 const userErrorReport = (e: unknown) =>
-  emptyReport(true, `truthgate could not run: ${(e as Error).message}. Fix the spec/config; do not delete approved specs.`);
+  emptyReport(true, `truthgate could not run: ${(e as Error).message}. Fix the spec/config; do not delete specs to get past this.`);
 
 export async function runHookWith(
   installer: AgentInstaller,
@@ -81,6 +81,7 @@ export async function runHookWith(
     }
     await d.writeState(root, { ...state, consecutiveBlocks: blocks });
     if (capped) process.stderr.write(cappedMessage(report) + '\n'); // loud even where the agent has no message channel
+    else if (!report.blocking && report.specChanges.length) process.stderr.write(specEditMessage(report) + '\n');
     return output(installer, report, capped);
   } catch (e) {
     // Never break the agent session on our own crash: allow the stop, and say so loudly.

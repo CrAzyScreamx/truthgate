@@ -52,6 +52,10 @@ export interface Spec {
   ops?: Op[];
   /** sequence specs only: expressions over `state` (from the shim's `state` op), checked after every op. */
   invariant?: Property[];
+  /** function specs, ts/js/python only: `out` is this input's value after the call (for functions that mutate an argument). */
+  observe?: string;
+  /** sequence specs, ts/js/python only: constructor/factory arguments for `reset` (JSON values). */
+  init?: unknown[];
   /** default: Config.defaultRuns */
   runs?: number;
   /** true: a `crash` result is not by itself a failure. */
@@ -134,9 +138,6 @@ export interface TamperFinding {
     | 'assert-removed'
     | 'skip-added'
     | 'test-deleted'
-    | 'spec-changed'
-    | 'spec-deleted'
-    | 'approvals-edited'
     | 'config-edited';
   detail: string;
 }
@@ -157,6 +158,8 @@ export interface RunReport {
   /** Non-blocking notes, e.g. "src/x.py changed but has no spec". */
   warnings: string[];
   changedFiles: string[];
+  /** Specs changed or deleted since the baseline commit. Not blocking, but shown loudly: a spec may have been weakened. */
+  specChanges: string[];
   /** true iff any FALSIFIED verdict or any tamper finding. */
   blocking: boolean;
   durationMs: number;
@@ -186,14 +189,6 @@ export interface State {
   lastRunAt?: string;
 }
 
-/** `.truthgate/approved.json` (committed): spec id -> sha256 of the spec file's normalized text (LF). */
-export interface Approvals {
-  version: 1;
-  specs: Record<string, { sha256: string; approvedAt: string }>;
-  /** sha256 of the canonical JSON of `specs`; detects hand edits. */
-  integrity: string;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Runners and languages (src/runner/index.ts, src/lang/index.ts)
 // ---------------------------------------------------------------------------------------------
@@ -204,8 +199,10 @@ export type CallResult =
 
 /** A live connection to the code under test (shim process, or in-process import for js/ts). */
 export interface FunctionCaller {
-  call(fn: string, input: Record<string, unknown>): Promise<CallResult>;
-  reset(): Promise<void>;
+  /** `observe`: reply with that input's value after the call instead of the return value. */
+  call(fn: string, input: Record<string, unknown>, observe?: string): Promise<CallResult>;
+  /** `args`: constructor/factory arguments (Spec.init). */
+  reset(args?: unknown[]): Promise<void>;
   state(): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -275,17 +272,14 @@ export interface AgentInstaller {
 // src/core/spec.ts      export function loadSpecs(root: string): Promise<Spec[]>   (validates, throws SpecError)
 // src/core/config.ts    export function loadConfig(root: string): Promise<Config>
 // src/core/state.ts     export function readState(root): Promise<State>; writeState(root, s): Promise<void>
-// src/core/approve.ts   export function checkApprovals(root, specs): Promise<TamperFinding[]>; runApprove(root): Promise<number>
-//                       export function approvalStates(root, specs): Promise<Record<string, 'approved'|'pending'|'changed'>>
 // src/core/baseline.ts  User-local store OUTSIDE the repo: `${TRUTHGATE_HOME ?? ~/.truthgate}/repos/<sha256(realpath root)>.json`
-//                       = { baseline: commit sha | null, approvedSha: sha256 of approved.json as written by approve, updatedAt }.
-//                       export function readBaseline(root): Promise<{ commit: string; source: 'approve' | 'clean-run' | 'head' }>
-//                         (no record, or recorded commit no longer exists -> HEAD with source 'head' + verify warns)
-//                       export function writeBaseline(root, patch: { commit?: string; approvedSha?: string }): Promise<void>
-//                       approve: writes approved.json, then records approvedSha and baseline = HEAD.
-//                       verify: on a run with no FALSIFIED and no tamper AND a clean working tree, advances baseline to HEAD.
-//                       Tamper/approval/config rules compare against `baseline`, never against an agent-movable HEAD.
-//                       approved.json counts as edited unless its sha equals approvedSha or its content at `baseline`.
+//                       = { baseline: commit sha | null, source, updatedAt }.
+//                       export function readBaseline(root): Promise<{ commit: string; source: 'auto' | 'clean-run' | 'accept' | 'head' }>
+//                         (no record, or recorded commit no longer exists -> HEAD with source 'head')
+//                       export function writeBaseline(root, patch: { commit: string; source }): Promise<void>
+//                       verify: records baseline = HEAD on its first run in a repo (and warns); advances it to HEAD on a run
+//                       with no FALSIFIED, no tamper, no UNVERIFIED and a clean working tree. `accept` moves it to HEAD.
+//                       Tamper/config rules and spec-change warnings compare against `baseline`, never an agent-movable HEAD.
 //                       config.json counts as edited ('config-edited') if it differs from its content at `baseline`.
 // src/core/diff.ts      export function changedFiles(root: string, base?: string): Promise<string[]>  (base default HEAD; --no-renames)
 // src/core/tamper.ts    export function detectTamper(root: string, changed: string[]): Promise<TamperFinding[]>
@@ -299,4 +293,4 @@ export interface AgentInstaller {
 //                       export function installPreCommit(root: string): Promise<FileChange>
 // src/mcp/server.ts     export function startMcp(root: string): Promise<void>
 // src/deep/index.ts     export function runDeep(root: string, specs: Spec[], changed: string[], config: Config): Promise<DeepReport>
-// src/cli.ts            bin entry: init | verify | approve | status | shim | hook | mcp
+// src/cli.ts            bin entry: init | verify | accept | status | shim | hook | mcp

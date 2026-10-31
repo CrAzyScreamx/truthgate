@@ -1,0 +1,199 @@
+title: Two-account ledger with deposit, withdraw and transfer; no overdraft, money is neither created nor lost
+target: ledger/ledger.go
+files:
+  go.mod: |
+    module truthgate.local/bench
+
+    go 1.22
+spec: |
+  id: bank.ledger
+  target: ledger/ledger.go::Ledger
+  lang: go
+  kind: sequence
+  ops:
+    - name: deposit
+      inputs: { acct: 'oneof["a","b"]', n: "int[1,50]" }
+    - name: withdraw
+      inputs: { acct: 'oneof["a","b"]', n: "int[1,50]" }
+    - name: transfer
+      inputs: { src: 'oneof["a","b"]', dst: 'oneof["a","b"]', n: "int[1,50]" }
+  invariant:
+    - name: no_overdraft
+      expr: "all(b in values(state.balances): b >= 0)"
+    - name: conserved
+      expr: "sum(values(state.balances)) == state.deposited - state.withdrawn"
+# The Go template builds a zero Ledger; point reset at the constructor, which makes the map.
+shim_edits:
+  - ["return &target.Ledger{}", "return target.New()"]
+examples:
+  - steps:
+      - { op: deposit, input: { acct: a, n: 100 } }
+      - { op: transfer, input: { src: a, dst: b, n: 30 } }
+      - { op: withdraw, input: { acct: b, n: 10 } }
+    state: { balances: { a: 70, b: 20 }, deposited: 100, withdrawn: 10 }
+  - steps:
+      - { op: deposit, input: { acct: a, n: 20 } }
+      - { op: withdraw, input: { acct: a, n: 50 }, rejected: true }
+variants:
+  ok:
+    bug: none
+    code: |
+      package ledger
+
+      import "errors"
+
+      // Ledger keeps balances in cents. Withdrawals and transfers never overdraw.
+      type Ledger struct {
+      	balances             map[string]int
+      	deposited, withdrawn int
+      }
+
+      func New() *Ledger { return &Ledger{balances: map[string]int{"a": 0, "b": 0}} }
+
+      func (l *Ledger) Deposit(acct string, n int) {
+      	l.balances[acct] += n
+      	l.deposited += n
+      }
+
+      func (l *Ledger) Withdraw(acct string, n int) error {
+      	if n > l.balances[acct] {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[acct] -= n
+      	l.withdrawn += n
+      	return nil
+      }
+
+      func (l *Ledger) Transfer(src, dst string, n int) error {
+      	if n > l.balances[src] {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[src] -= n
+      	l.balances[dst] += n
+      	return nil
+      }
+
+      func (l *Ledger) State() map[string]any {
+      	return map[string]any{"balances": l.balances, "deposited": l.deposited, "withdrawn": l.withdrawn}
+      }
+  overdraft_off_by_one:
+    bug: withdraw allows going one cent below zero
+    code: |
+      package ledger
+
+      import "errors"
+
+      // Ledger keeps balances in cents. Withdrawals and transfers never overdraw.
+      type Ledger struct {
+      	balances             map[string]int
+      	deposited, withdrawn int
+      }
+
+      func New() *Ledger { return &Ledger{balances: map[string]int{"a": 0, "b": 0}} }
+
+      func (l *Ledger) Deposit(acct string, n int) {
+      	l.balances[acct] += n
+      	l.deposited += n
+      }
+
+      func (l *Ledger) Withdraw(acct string, n int) error {
+      	if n > l.balances[acct]+1 {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[acct] -= n
+      	l.withdrawn += n
+      	return nil
+      }
+
+      func (l *Ledger) Transfer(src, dst string, n int) error {
+      	if n > l.balances[src] {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[src] -= n
+      	l.balances[dst] += n
+      	return nil
+      }
+
+      func (l *Ledger) State() map[string]any {
+      	return map[string]any{"balances": l.balances, "deposited": l.deposited, "withdrawn": l.withdrawn}
+      }
+  self_transfer:
+    bug: transfer reads both balances first, so a transfer to the same account creates money
+    code: |
+      package ledger
+
+      import "errors"
+
+      // Ledger keeps balances in cents. Withdrawals and transfers never overdraw.
+      type Ledger struct {
+      	balances             map[string]int
+      	deposited, withdrawn int
+      }
+
+      func New() *Ledger { return &Ledger{balances: map[string]int{"a": 0, "b": 0}} }
+
+      func (l *Ledger) Deposit(acct string, n int) {
+      	l.balances[acct] += n
+      	l.deposited += n
+      }
+
+      func (l *Ledger) Withdraw(acct string, n int) error {
+      	if n > l.balances[acct] {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[acct] -= n
+      	l.withdrawn += n
+      	return nil
+      }
+
+      func (l *Ledger) Transfer(src, dst string, n int) error {
+      	from, to := l.balances[src], l.balances[dst]
+      	if n > from {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[src] = from - n
+      	l.balances[dst] = to + n
+      	return nil
+      }
+
+      func (l *Ledger) State() map[string]any {
+      	return map[string]any{"balances": l.balances, "deposited": l.deposited, "withdrawn": l.withdrawn}
+      }
+  transfer_unguarded:
+    bug: transfer has no balance check
+    code: |
+      package ledger
+
+      import "errors"
+
+      // Ledger keeps balances in cents. Withdrawals and transfers never overdraw.
+      type Ledger struct {
+      	balances             map[string]int
+      	deposited, withdrawn int
+      }
+
+      func New() *Ledger { return &Ledger{balances: map[string]int{"a": 0, "b": 0}} }
+
+      func (l *Ledger) Deposit(acct string, n int) {
+      	l.balances[acct] += n
+      	l.deposited += n
+      }
+
+      func (l *Ledger) Withdraw(acct string, n int) error {
+      	if n > l.balances[acct] {
+      		return errors.New("insufficient funds")
+      	}
+      	l.balances[acct] -= n
+      	l.withdrawn += n
+      	return nil
+      }
+
+      func (l *Ledger) Transfer(src, dst string, n int) error {
+      	l.balances[src] -= n
+      	l.balances[dst] += n
+      	return nil
+      }
+
+      func (l *Ledger) State() map[string]any {
+      	return map[string]any{"balances": l.balances, "deposited": l.deposited, "withdrawn": l.withdrawn}
+      }

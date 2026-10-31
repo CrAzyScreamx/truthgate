@@ -17,8 +17,8 @@ const spec = (id: string, lang: Spec['lang']): Spec => ({
 async function connect() {
   const root = await mkdtemp(join(tmpdir(), 'tg-mcp-'));
   await mkdir(join(root, '.truthgate'));
-  await writeFile(join(root, '.truthgate/last-run.json'), JSON.stringify(report(true)));
-  const states = { 'sort.basic': 'approved', 'ui.thing': 'pending', 'edited.one': 'changed' } as const;
+  const last = { ...report(true), specChanges: ['spec edited.one (.truthgate/specs/edited.one.yaml) was changed since the baseline abc1234: check it was not weakened'] };
+  await writeFile(join(root, '.truthgate/last-run.json'), JSON.stringify(last));
   const deep = {
     mutation: { caught: 3, total: 4, survivors: [{ file: 'src/sort.py', line: 7, desc: '< -> <=' }], durationMs: 900 },
     proofs: [{ specId: 'sort.basic', kind: 'PROVEN_MODEL_ONLY' as const, detail: 'rocq: sort_correct', durationMs: 1 }],
@@ -26,7 +26,6 @@ async function connect() {
   const deps: McpDeps = {
     verify: async (_r, o) => ({ ...report(true), ...(o.deep ? { deep } : {}) }),
     loadSpecs: async () => [spec('sort.basic', 'python'), spec('ui.thing', 'ts'), spec('edited.one', 'python')],
-    approvalStates: async (_r, specs) => Object.fromEntries(specs.map((s) => [s.id, states[s.id as keyof typeof states]])),
     getAdapter: () => ({ shimTemplate: () => ({ path: 'shims/sort.py', source: 'print(1)' }) }) as unknown as LanguageAdapter,
   };
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -40,7 +39,7 @@ async function connect() {
   return { client, call };
 }
 
-test('exposes exactly the five tools, no approve', async () => {
+test('exposes exactly the five tools, no accept', async () => {
   const { client } = await connect();
   const names = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(names, ['explain_verdict', 'list_specs', 'shim_template', 'spec_status', 'verify']);
@@ -50,13 +49,12 @@ test('tool results are compact text', async () => {
   const { call } = await connect();
   assert.match((await call('verify', { all: true })).text, /^BLOCKING .*\nFALSIFIED sort\.basic\/sorted/);
   assert.equal((await call('list_specs')).text, [
-    'sort.basic python function src/sort.basic.py::f approved',
-    'ui.thing ts function src/ui.thing.py::f pending',
-    'edited.one python function src/edited.one.py::f changed',
+    'sort.basic python function src/sort.basic.py::f',
+    'ui.thing ts function src/ui.thing.py::f',
+    'edited.one python function src/edited.one.py::f',
   ].join('\n'));
-  assert.match((await call('spec_status', { id: 'sort.basic' })).text, /approval: approved\nFALSIFIED/);
-  assert.match((await call('spec_status', { id: 'edited.one' })).text, /approval: changed: APPROVAL VOID/);
-  assert.match((await call('spec_status', { id: 'ui.thing' })).text, /approval: pending: NOT APPROVED/);
+  assert.match((await call('spec_status', { id: 'sort.basic' })).text, /not edited since the baseline \(as of the last run\)\nFALSIFIED/);
+  assert.match((await call('spec_status', { id: 'edited.one' })).text, /EDITED: spec edited\.one .* was changed since the baseline/);
   const ex = (await call('explain_verdict', { id: 'sort.basic', property: 'sorted' })).text;
   assert.match(ex, /counterexample: \{"xs":\[1,0\]\}\nproperty: out == sorted\(xs\)\nnext: Fix the code/);
   assert.equal((await call('shim_template', { id: 'sort.basic' })).text, 'save to shims/sort.py:\nprint(1)');
@@ -73,7 +71,7 @@ test('deep verify includes the mutation summary, survivors and proof verdicts', 
 test('errors come back as tool errors, unknown and prototype names are rejected', async () => {
   const { call } = await connect();
   assert.deepEqual(await call('spec_status', { id: 'nope' }), { text: 'error: no spec with id "nope"', isError: true });
-  assert.equal((await call('approve')).isError, true);
+  assert.equal((await call('accept')).isError, true);
   assert.equal((await call('constructor')).isError, true);
   assert.match((await call('explain_verdict', { id: 'other' })).text, /no verdict/);
 });

@@ -132,23 +132,3 @@ export function parseType(src: string): TypeSpec {
   if (i < src.length) fail('trailing text');
   return t;
 }
-
-/** Plain-words description, used by `approve`. */
-export function describeType(t: TypeSpec): string {
-  switch (t.t) {
-    case 'int':
-      return `an integer from ${t.min} to ${t.max}`;
-    case 'decimal':
-      return `a decimal from ${t.min} to ${t.max} with ${t.places} places`;
-    case 'str':
-      return `a string of up to ${t.max} characters`;
-    case 'bool':
-      return 'true or false';
-    case 'list':
-      return `a list of up to ${t.max} items, each ${describeType(t.of)}`;
-    case 'record':
-      return `a record with ${Object.entries(t.fields).map(([k, v]) => `${k} = ${describeType(v)}`).join(', ') || 'no fields'}`;
-    case 'oneof':
-      return `one of ${t.values.map((v) => JSON.stringify(v)).join(', ')}`;
-  }
-}

@@ -27,10 +27,28 @@ test('usage errors exit 2', async () => {
   assert.match(cli(root, 'shim', 'missing').err, /no spec with id "missing"/);
 });
 
-test('approve refuses without a TTY', async () => {
+test('approve is gone: specs need no approval', async () => {
   const r = cli(await repo(), 'approve');
   assert.equal(r.code, 2);
-  assert.match(r.err, /interactive terminal/);
+  assert.match(r.err, /unknown command "approve"/);
+});
+
+test('accept lists the test/config changes it absorbs and moves the baseline to HEAD', async () => {
+  const { put } = await import('./helpers.ts');
+  const { execFileSync } = await import('node:child_process');
+  const root = await repo({ 'tests/test_a.py': 'def test_a():\n    assert f(1) == 1\n    assert f(2) == 2\n' });
+  assert.equal(cli(root, 'verify').code, 0); // records the baseline
+  await put(root, 'tests/test_a.py', 'def test_a():\n    assert f(1) == 1\n');
+  execFileSync('git', ['commit', '-qam', 'drop a case', '--no-verify'], { cwd: root });
+  assert.equal(cli(root, 'verify').code, 1);
+  assert.match(cli(root, 'status').out, /TAMPER\s+assert-removed\s+tests\/test_a\.py/);
+  const r = cli(root, 'accept');
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /Accepting these changes since \w{7}:\n  assert-removed: tests\/test_a\.py[\s\S]*Baseline set to \w{7} \(HEAD\)/);
+  assert.equal(cli(root, 'verify').code, 0);
+  await put(root, 'tests/test_a.py', 'x = 1\n');
+  assert.match(cli(root, 'accept').out, /Uncommitted changes are not accepted/);
+  assert.match(cli(await repo(), 'accept').err, /no commits yet/);
 });
 
 test('init without a TTY needs --agent; unknown agents rejected', async () => {
@@ -79,20 +97,33 @@ test('R1-N4: init does not promise a commit gate when the existing hook is not s
   assert.match(fresh.out, /and at every commit \(pre-commit hook\)/);
 });
 
+test('init records the baseline at HEAD (once), so commits before the first verify are still checked', async () => {
+  const root = await repo({ 'a.txt': 'x' });
+  assert.doesNotMatch(cli(root, 'init', '--agent', 'claude', '--dry-run').out, /Recorded the truthgate baseline/);
+  assert.match(cli(root, 'init', '--agent', 'claude').out, /Recorded the truthgate baseline at \w{7} \(HEAD\)/);
+  assert.doesNotMatch(cli(root, 'init', '--agent', 'claude').out, /Recorded the truthgate baseline/);
+  assert.match(cli(root, 'status').out, /Baseline: \w{7} \(auto\)/);
+});
+
 test('init for an enforcing agent skips the pre-commit hook by default', async () => {
   const root = await repo({ 'a.txt': 'x' });
   assert.equal(cli(root, 'init', '--agent', 'claude', '--yes').code, 0);
   assert.ok(!existsSync(join(root, '.git/hooks/pre-commit')));
 });
 
-test('status lists specs with their approval state', async () => {
-  const root = await repo({
-    '.truthgate/specs/a.yaml': 'id: a\ntarget: src/a.py::f\nlang: python\ninputs: { x: "int[0,1]" }\nensures: [{ name: p, expr: "out == x" }]\n',
-  });
+test('status lists specs, the baseline, and spec edits since it', async () => {
+  const { put } = await import('./helpers.ts');
+  const SPEC = 'id: a\ntarget: src/a.py::f\nlang: python\ninputs: { x: "int[0,1]" }\nensures: [{ name: p, expr: "out == x" }]\n';
+  const root = await repo({ '.truthgate/specs/a.yaml': SPEC });
   const r = cli(root, 'status');
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /^a\s+pending\s+function\s+src\/a\.py::f$/m);
-  assert.match(r.out, /1 spec\(s\) need approval/);
+  assert.match(r.out, /^a\s+function\s+src\/a\.py::f$/m);
+  assert.match(r.out, /Baseline: none recorded yet/);
+  cli(root, 'verify');
+  await put(root, '.truthgate/specs/a.yaml', SPEC.replace('out == x', 'true'));
+  const s = cli(root, 'status').out;
+  assert.match(s, /Baseline: \w{7} \(auto\)/);
+  assert.match(s, /SPEC EDIT\s+spec a .* was changed since the baseline/);
 });
 
 test('bad spec files exit 2 with file and field', async () => {
@@ -129,14 +160,26 @@ test('verify end to end on a js target: exit 1 on FALSIFIED, --json, shim for js
   assert.match(cli(root, 'shim', 'py', '--force').out, /wrote/);
 });
 
-test('init --yes --dry-run with Python files plans the Hypothesis install', async () => {
-  const root = await repo({ 'pkg/a.py': 'x = 1\n' });
-  const r = cli(root, 'init', '--agent', 'claude', '--yes', '--dry-run');
-  assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /would run: .*-m pip install hypothesis, then set python\.native/);
+test('init --yes --dry-run plans Hypothesis only into a project environment (uv or .venv), never the system Python', async () => {
+  const root = await repo({ 'pkg/a.py': 'x = 1\n', 'pyproject.toml': '[project]\nname = "p"\n' });
+  const sys = cli(root, 'init', '--agent', 'claude', '--yes', '--dry-run');
+  assert.equal(sys.code, 0, sys.err);
+  assert.doesNotMatch(sys.out, /would run/);
+  assert.match(sys.out, /no uv\.lock or \.venv to add Hypothesis to/);
   const { put } = await import('./helpers.ts');
+  await put(root, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python', '');
+  assert.match(cli(root, 'init', '--agent', 'claude', '--yes', '--dry-run').out, /would run: .*\.venv.* -m pip install hypothesis, then set python\.native .*commit \.truthgate\/config\.json/);
   await put(root, 'uv.lock', '');
   assert.match(cli(root, 'init', '--agent', 'claude', '--yes', '--dry-run').out, /would run: uv add --dev hypothesis/);
+});
+
+test('init --yes in a non-Python repo with stray .py scripts: no Hypothesis offer, no config written, verify not blocked', async () => {
+  const root = await repo({ 'src/app.ts': 'export const x = 1;\n', 'scripts/tool.py': 'x = 1\n' });
+  const r = cli(root, 'init', '--agent', 'claude', '--yes');
+  assert.equal(r.code, 0, r.err);
+  assert.doesNotMatch(r.out, /Hypothesis/);
+  assert.ok(!existsSync(join(root, '.truthgate/config.json')));
+  assert.equal(cli(root, 'verify').code, 0);
 });
 
 test('hook reads stdin and returns the installer output', async () => {
@@ -145,11 +188,11 @@ test('hook reads stdin and returns the installer output', async () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
-test('init without a TTY or --yes in a Python repo prints the Hypothesis hint', async () => {
-  const root = await repo({ 'a.py': 'x = 1\n' });
+test('init without a TTY or --yes in a Python project prints the Hypothesis hint', async () => {
+  const root = await repo({ 'a.py': 'x = 1\n', 'requirements.txt': '', 'uv.lock': '' });
   const r = cli(root, 'init', '--agent', 'claude', '--dry-run');
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /Python found: rerun with --yes to add Hypothesis/);
+  assert.match(r.out, /Python project found: rerun with --yes to add Hypothesis/);
 });
 
 test('a config value below 1 exits 2', async () => {

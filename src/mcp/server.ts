@@ -1,34 +1,26 @@
-// stdio MCP server. Deliberately has no approve tool: agents must not approve their own specs.
+// stdio MCP server. Deliberately has no accept tool: moving the baseline past test/config edits is the user's call.
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { LanguageAdapter, Lang, RunReport, Spec } from '../contract.ts';
-import type { ApprovalState } from '../core/approve.ts';
 import { summarize, verdictLine } from '../agents/summary.ts';
-
-const approvalText: Record<ApprovalState, string> = {
-  approved: 'approved',
-  pending: 'pending: NOT APPROVED (ask the user to run `npx truthgate approve`)',
-  changed: 'changed: APPROVAL VOID, the spec was edited after approval (only the user can re-approve)',
-};
 
 export interface McpDeps {
   verify(root: string, opts: { deep?: boolean; all?: boolean }): Promise<RunReport>;
   loadSpecs(root: string): Promise<Spec[]>;
-  approvalStates(root: string, specs: Spec[]): Promise<Record<string, ApprovalState>>;
   getAdapter(lang: Lang): LanguageAdapter;
 }
 
 async function defaultDeps(): Promise<McpDeps> {
-  const [{ verify }, { loadSpecs }, { approvalStates }, { getAdapter }] = await Promise.all([
+  const [{ verify }, { loadSpecs }, { getAdapter }] = await Promise.all([
     import('../core/verify.ts'),
     import('../core/spec.ts'),
-    import('../core/approve.ts'),
     import('../lang/index.ts'),
   ]);
-  return { verify, loadSpecs, approvalStates, getAdapter };
+  return { verify, loadSpecs, getAdapter };
 }
 
 const idArg = { id: { type: 'string', description: 'spec id' } };
@@ -38,8 +30,8 @@ const tools = [
     description: 'Run truthgate on the changed files (all: every spec; deep: mutation + proof audit). Returns verdicts.',
     inputSchema: { type: 'object', properties: { all: { type: 'boolean' }, deep: { type: 'boolean' } } },
   },
-  { name: 'list_specs', description: 'List truthgate specs: id, lang, kind, target, approval.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'spec_status', description: 'Approval state and last-run verdicts of one spec.', inputSchema: { type: 'object', properties: idArg, required: ['id'] } },
+  { name: 'list_specs', description: 'List truthgate specs: id, lang, kind, target.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'spec_status', description: 'Last-run verdicts of one spec, and whether it was edited since the baseline.', inputSchema: { type: 'object', properties: idArg, required: ['id'] } },
   {
     name: 'explain_verdict',
     description: 'Explain a verdict from the last run: property, detail, counterexample, what to do.',
@@ -50,7 +42,7 @@ const tools = [
 
 const advice: Record<string, string> = {
   FALSIFIED: 'Fix the code so the property holds for this input. Do not weaken or edit the spec.',
-  WEAK_SPEC: 'A fake implementation passed: add a property it fails, then ask the user to run `npx truthgate approve`.',
+  WEAK_SPEC: 'A fake implementation passed: add a property it fails.',
   UNVERIFIED: 'Nothing was established. Explain the reason to the user; fix the shim/spec/toolchain if it is yours.',
   TESTED: 'Report as tested with N runs, not as proven.',
   PROVEN_MODEL_ONLY: 'The proof covers a model, not the tested implementation. Say so.',
@@ -66,7 +58,9 @@ async function readJson<T>(file: string): Promise<T | undefined> {
 }
 
 export function createServer(root: string, deps?: McpDeps): Server {
-  const server = new Server({ name: 'truthgate', version: '0.1.0' }, { capabilities: { tools: {} } });
+  // package.json sits two levels up from both src/mcp/ and dist/mcp/
+  const { version } = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string };
+  const server = new Server({ name: 'truthgate', version }, { capabilities: { tools: {} } });
   let d: McpDeps | undefined = deps;
   const lastRun = () => readJson<RunReport>(join(root, '.truthgate', 'last-run.json'));
   const findSpec = async (id: unknown) => {
@@ -83,14 +77,14 @@ export function createServer(root: string, deps?: McpDeps): Server {
     async list_specs() {
       const specs = await d!.loadSpecs(root);
       if (specs.length === 0) return 'no specs in .truthgate/specs/';
-      const states = await d!.approvalStates(root, specs);
-      return specs.map((s) => `${s.id} ${s.lang} ${s.kind} ${s.target} ${states[s.id] ?? 'pending'}`).join('\n');
+      return specs.map((s) => `${s.id} ${s.lang} ${s.kind} ${s.target}`).join('\n');
     },
     async spec_status(a) {
       const spec = await findSpec(a.id);
-      const state = approvalText[(await d!.approvalStates(root, [spec]))[spec.id] ?? 'pending'];
-      const verdicts = (await lastRun())?.verdicts.filter((v) => v.specId === spec.id) ?? [];
-      return [`${spec.id} (${spec.file}) -> ${spec.target}`, `approval: ${state}`,
+      const run = await lastRun();
+      const verdicts = run?.verdicts.filter((v) => v.specId === spec.id) ?? [];
+      const edited = run?.specChanges?.find((c) => c.includes(spec.file));
+      return [`${spec.id} (${spec.file}) -> ${spec.target}`, edited ? `EDITED: ${edited}` : 'not edited since the baseline (as of the last run)',
         verdicts.length ? verdicts.map(verdictLine).join('\n') : 'no verdicts in the last run'].join('\n');
     },
     async explain_verdict(a) {

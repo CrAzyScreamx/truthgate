@@ -6,13 +6,12 @@ import { loadConfig } from './config.ts';
 import { loadSpecs, targetFile } from './spec.ts';
 import { changedFiles, commitOf, isDirty, NotGitError } from './diff.ts';
 import { readBaseline, writeBaseline } from './baseline.ts';
-import { detectTamper } from './tamper.ts';
-import { approvalStates, checkApprovals } from './approve.ts';
+import { checkConfig, detectTamper, specChanges } from './tamper.ts';
 import { weakSpecCheck } from './weak.ts';
 import { matchesAny } from './glob.ts';
 
 export const LAST_RUN_FILE = '.truthgate/last-run.json';
-const OWN_FILES = [LAST_RUN_FILE, '.truthgate/state.json'];
+export const OWN_FILES = [LAST_RUN_FILE, '.truthgate/state.json'];
 
 /** Injection points for tests; defaults are the real modules, imported lazily. */
 export interface VerifyDeps {
@@ -36,20 +35,22 @@ export async function verify(
   let changed: string[] = [];
   let git = true;
   let base = '';
-  let recorded = false;
   try {
     const b = await readBaseline(root);
     base = b.commit;
-    recorded = b.source !== 'head';
     changed = await changedFiles(root, base);
-    if (b.source === 'head')
-      warnings.push('no truthgate baseline recorded on this machine: comparing against HEAD, which an agent can move by committing; the user runs `npx truthgate approve` to record one');
+    // First run here (or the record was deleted): pin HEAD now, so later commits cannot hide test or config edits.
+    if (b.source === 'head' && base) {
+      await writeBaseline(root, { commit: base, source: 'auto' });
+      warnings.push(`recorded the truthgate baseline at ${base.slice(0, 7)} (HEAD): changes committed before it are not checked`);
+    }
   } catch (e) {
     if (!(e instanceof NotGitError)) throw e;
     git = false;
     warnings.push('not a git repository: running every spec; tamper checks skipped');
   }
-  const tamper = git ? [...(await detectTamper(root, changed, adapters, base)), ...(await checkApprovals(root, specs, base))] : [];
+  const tamper = git ? [...(await detectTamper(root, changed, adapters, base)), ...(await checkConfig(root, base))] : [];
+  const specChanged = git ? await specChanges(root, specs, changed, base) : [];
 
   const all = opts.all || !git;
   const selected = all ? specs : specs.filter((s) => changed.includes(targetFile(s)) || changed.includes(s.file));
@@ -60,8 +61,6 @@ export async function verify(
     if (targets.has(f) || f.startsWith('.truthgate/') || !matchesAny(f, config.sourceGlobs) || matchesAny(f, testGlobs)) continue;
     if (existsSync(join(root, f))) warnings.push(`${f} changed but has no spec: UNVERIFIED (no spec)`);
   }
-  const states = await approvalStates(root, selected, git ? base : undefined);
-  for (const s of selected) if (states[s.id] !== 'approved') warnings.push(`spec ${s.id} is not approved yet; ask the user to run \`npx truthgate approve\``);
 
   const verdicts: Verdict[] = [];
   const budget = opts.budgetSeconds ?? config.budgetSeconds;
@@ -89,15 +88,15 @@ export async function verify(
     verdicts,
     tamper,
     warnings,
+    specChanges: specChanged,
     changedFiles: changed,
     blocking: tamper.length > 0 || verdicts.some((v) => v.kind === 'FALSIFIED'),
     durationMs: Date.now() - start,
     ...(deep && { deep }),
   };
-  // A fully clean run on a clean tree moves an EXISTING baseline forward; only approve creates one
-  // (else deleting the record and running verify would launder the HEAD fallback). UNVERIFIED also
-  // holds it back, so committing code whose check could not run never becomes part of the baseline.
-  if (git && recorded && !report.blocking && !verdicts.some((v) => v.kind === 'UNVERIFIED') && !(await isDirty(root, OWN_FILES))) {
+  // A fully clean run on a clean tree moves the baseline forward. UNVERIFIED holds it back, so committing
+  // code whose check could not run never becomes part of the baseline. Spec changes don't (they only warn).
+  if (git && !report.blocking && !verdicts.some((v) => v.kind === 'UNVERIFIED') && !(await isDirty(root, OWN_FILES))) {
     const head = await commitOf(root, 'HEAD');
     if (head && head !== base) await writeBaseline(root, { commit: head, source: 'clean-run' });
   }

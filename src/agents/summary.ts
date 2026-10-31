@@ -21,6 +21,7 @@ export function summarize(r: RunReport, all = false): string {
     lines.push(...m.survivors.map((s) => `  survivor ${s.file}:${s.line}: ${s.desc}`));
   }
   if (all) lines.push(...(r.deep?.proofs ?? []).map(verdictLine));
+  lines.push(...(r.specChanges ?? []).map((c) => `SPEC EDITED: ${c}`));
   lines.push(...r.warnings.map((w) => `warning: ${w}`));
   if (all && lines.length === 0) lines.push('no specs selected for the changed files');
   return lines.join('\n');
@@ -30,6 +31,12 @@ export function blockReason(r: RunReport): string {
   return `truthgate blocked this stop:\n${summarize(r)}\n` +
     'Fix the code, never weaken the spec or tests (see the truthgate-verdicts skill). ' +
     'Then run `npx -y truthgate verify` and finish again.';
+}
+
+/** Shown to the user on an allowed stop when specs were edited: specs need no approval, so this is the check. */
+export function specEditMessage(r: RunReport): string | undefined {
+  if (!r.specChanges?.length) return undefined;
+  return `truthgate: specs were edited since the baseline. Review them: a weakened spec passes code it should catch.\n${r.specChanges.map((c) => `- ${c}`).join('\n')}`;
 }
 
 /** Shown when the stop is allowed although verification did not pass (loop cap or internal error). */

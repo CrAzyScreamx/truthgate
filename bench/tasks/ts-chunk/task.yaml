@@ -1,0 +1,60 @@
+title: Split a list into consecutive chunks of a given size; only the last chunk may be shorter
+target: src/chunk.ts
+spec: |
+  id: util.chunk
+  target: src/chunk.ts::chunk
+  lang: ts
+  inputs:
+    xs: list<int[0,9]>[30]
+    size: int[1,6]
+  ensures:
+    - name: chunk_count
+      expr: "len(out) == (len(xs) + size - 1 - (len(xs) + size - 1) % size) / size"
+    - name: full_chunks
+      expr: "all(i in range(len(out) - 1): len(out[i]) == size)"
+    - name: last_chunk_fits
+      expr: "len(out) > 0 implies (len(out[len(out) - 1]) >= 1 and len(out[len(out) - 1]) <= size)"
+    - name: same_items_in_order
+      expr: "all(i in range(len(xs)): out[(i - i % size) / size][i % size] == xs[i])"
+examples:
+  - { input: { xs: [1, 2, 3, 4], size: 2 }, out: [[1, 2], [3, 4]] }
+  - { input: { xs: [], size: 3 }, out: [] }
+  - { input: { xs: [1, 2], size: 5 }, out: [[1, 2]] }
+variants:
+  ok:
+    bug: none
+    code: |
+      /** Split xs into consecutive chunks of `size`; only the last chunk may be shorter. */
+      export function chunk<T>(xs: T[], size: number): T[][] {
+        const out: T[][] = [];
+        for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+        return out;
+      }
+  drops_tail:
+    bug: the loop stops before a partial last chunk, dropping it
+    code: |
+      /** Split xs into consecutive chunks of `size`; only the last chunk may be shorter. */
+      export function chunk<T>(xs: T[], size: number): T[][] {
+        const out: T[][] = [];
+        for (let i = 0; i + size <= xs.length; i += size) out.push(xs.slice(i, i + size));
+        return out;
+      }
+  merge_short_tail:
+    bug: merges a one-item last chunk into the previous one
+    code: |
+      /** Split xs into consecutive chunks of `size`; only the last chunk may be shorter. */
+      export function chunk<T>(xs: T[], size: number): T[][] {
+        const out: T[][] = [];
+        for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+        if (out.length > 1 && out[out.length - 1]!.length === 1) out[out.length - 2]!.push(...out.pop()!);
+        return out;
+      }
+  mutates_input:
+    bug: empties the caller's array (output is right; no property covers inputs)
+    code: |
+      /** Split xs into consecutive chunks of `size`; only the last chunk may be shorter. */
+      export function chunk<T>(xs: T[], size: number): T[][] {
+        const out: T[][] = [];
+        while (xs.length) out.push(xs.splice(0, size));
+        return out;
+      }

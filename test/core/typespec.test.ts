@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseType, describeType } from '../../src/core/typespec.ts';
+import { parseType } from '../../src/core/typespec.ts';
 
 test('parses every generator form', () => {
   assert.deepEqual(parseType('int[-1000,1000]'), { t: 'int', min: -1000, max: 1000 });
@@ -44,15 +44,4 @@ test('rejects bad generators', () => {
   ]) {
     assert.throws(() => parseType(bad), /bad type/, bad);
   }
-});
-
-test('describes types in plain words', () => {
-  assert.equal(
-    describeType(parseType('list<record{a:int[0,1]}>[3]')),
-    'a list of up to 3 items, each a record with a = an integer from 0 to 1',
-  );
-  assert.equal(describeType(parseType('oneof["x",2]')), 'one of "x", 2');
-  assert.equal(describeType(parseType('decimal[0,1,2]')), 'a decimal from 0 to 1 with 2 places');
-  assert.equal(describeType(parseType('str[4]')), 'a string of up to 4 characters');
-  assert.equal(describeType(parseType('bool')), 'true or false');
 });

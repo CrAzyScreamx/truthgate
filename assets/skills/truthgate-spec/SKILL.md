@@ -5,13 +5,15 @@ description: Write a truthgate property spec (.truthgate/specs/<id>.yaml) before
 
 # Writing a truthgate spec
 
-truthgate checks code against **user-approved** property specs. A spec says what must hold for
-*every* input, not for one example. Unit tests still matter; specs complement them.
+truthgate checks code against property specs. A spec says what must hold for *every* input, not
+for one example, and truthgate generates the inputs. Unit tests still matter; specs complement them.
 
 ## When to write one
 - New or changed function with a contract you can state in one line ("output is sorted", "total is conserved").
 - Stateful code with guards (balances, stock, queues): use a **sequence** spec.
 - `truthgate verify` says `UNVERIFIED (no spec)` for a file you changed.
+- Asked to check **existing** code: spec its stable contracts (helpers, parsers, money, state machines) and
+  run `npx truthgate verify --all`; plain `verify` only runs specs whose target file changed.
 - Skip pure glue, I/O wiring and UI code.
 
 ## File: `.truthgate/specs/<id>.yaml`
@@ -32,6 +34,27 @@ runs: 100                            # optional
 ```
 `out` is the return value; inputs are in scope by name. Add `allowCrash: true` only if an
 exception is an acceptable outcome. Non-JS/TS targets need a shim: see the `truthgate-shim` skill.
+
+## Which targets work
+- **TS/JS:** the file is loaded with tsx and the project's `tsconfig.json`, so decorators, constructor
+  parameter properties, extensionless imports, `paths` aliases and CommonJS all work. Importing the file
+  runs its imports' top-level code: a module that connects to a database or reads env vars on import
+  will fail there too. Prefer targets in modules with a pure core.
+- **Python:** the file must import cleanly with the project's interpreter (`uv`, `.venv`, else `python`).
+- If a target can't load, the verdict is `UNVERIFIED` with the load error (`cannot load <file>: ...`).
+  Fix the cause or pick a target that loads; never report it as checked.
+
+## Awkward shapes
+| The target... | Do this |
+|---|---|
+| returns nothing and changes an argument (`addUnique(xs, x)`) | `observe: xs`: `out` is then `xs` after the call (ts/js/python) |
+| is a class whose constructor takes arguments | sequence spec with `init: [3, "eur"]` (JSON values; ts/js/python) |
+| is a generator or returns a Set/iterator | nothing: it arrives as a list |
+| takes a callback, a DB handle or a client | target a small exported helper that calls it with a fixed stand-in, or spec the pure function it delegates to |
+| is a NestJS/DI service | target the class with `init` for plain constructor args, or the pure functions it uses; injected services can't be passed |
+
+Other languages (Java, C#, Go, Rust) don't support `observe`/`init`: wrap the target in a helper that
+returns the value to check or builds the object.
 
 ## Generators (`inputs`)
 | Syntax | Meaning |
@@ -86,11 +109,12 @@ A guarded op that refuses the input should throw the language's refusal error (`
 named `Rejected`, ...; see truthgate-shim). That becomes a `rejected` result, which is
 a normal outcome. Only a broken invariant or a `crash` is a failure.
 
-## Approval (required)
-Specs only count once the **user** approves them. You cannot approve your own spec.
-1. Write the spec file.
-2. Tell the user: "Please review `.truthgate/specs/<id>.yaml` and run `npx truthgate approve` in your terminal."
-3. Never edit `.truthgate/approved.json`. Editing an approved spec voids its approval and is reported as tampering.
+## Specs count as soon as they exist
+There is no approval step. That makes editing an existing spec the easy way to dodge a failure, so:
+- Never edit or delete an existing spec to get a pass. Every spec edit since the baseline is shown to the
+  user as `SPEC EDIT` in the report and the stop hook.
+- If a spec is genuinely wrong, say so and explain the change to the user before you make it.
+- New specs are not flagged: write as many as the change needs.
 
 ## Check it
 Run `npx truthgate verify` (or the MCP `verify` tool). Read results with the `truthgate-verdicts` skill.

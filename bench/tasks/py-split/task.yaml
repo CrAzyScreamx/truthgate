@@ -1,0 +1,53 @@
+title: Split a payment into n parts that differ by at most one cent, larger parts first
+target: src/money.py
+spec: |
+  id: money.split
+  target: src/money.py::split_cents
+  lang: python
+  inputs:
+    total: int[0,100000]
+    n: int[1,12]
+  ensures:
+    - name: conserves
+      expr: "sum(out) == total"
+    - name: count
+      expr: "len(out) == n"
+    - name: fair
+      expr: "max(out) - min(out) <= 1"
+    - name: larger_first
+      expr: "all(i in range(len(out) - 1): out[i] >= out[i + 1])"
+examples:
+  - { input: { total: 100, n: 4 }, out: [25, 25, 25, 25] }
+  - { input: { total: 100, n: 3 }, out: [34, 33, 33] }
+  - { input: { total: 0, n: 3 }, out: [0, 0, 0] }
+  - { input: { total: 7, n: 1 }, out: [7] }
+variants:
+  ok:
+    bug: none
+    code: |
+      def split_cents(total, n):
+          """Split total cents into n parts that differ by at most one cent, larger parts first."""
+          q, r = divmod(total, n)
+          return [q + 1] * r + [q] * (n - r)
+  remainder_to_first:
+    bug: the whole remainder goes to the first part
+    code: |
+      def split_cents(total, n):
+          """Split total cents into n parts that differ by at most one cent, larger parts first."""
+          parts = [total // n] * n
+          parts[0] += total % n
+          return parts
+  float_round:
+    bug: rounds total/n with banker's rounding; the last part absorbs the difference
+    code: |
+      def split_cents(total, n):
+          """Split total cents into n parts that differ by at most one cent, larger parts first."""
+          base = round(total / n)
+          parts = [base] * (n - 1) + [total - base * (n - 1)]
+          return sorted(parts, reverse=True)
+  drop_remainder:
+    bug: floor division; the remainder is lost
+    code: |
+      def split_cents(total, n):
+          """Split total cents into n parts that differ by at most one cent, larger parts first."""
+          return [total // n] * n

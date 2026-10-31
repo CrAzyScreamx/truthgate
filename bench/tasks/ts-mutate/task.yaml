@@ -1,0 +1,50 @@
+title: Add an item to a list in place unless it is already there (void, mutates its argument; checked with observe)
+target: src/list.ts
+spec: |
+  id: list.add-unique
+  target: src/list.ts::addUnique
+  lang: ts
+  inputs:
+    xs: list<int[0,9]>[4]
+    x: int[0,9]
+  requires: ["unique(xs)"]
+  observe: xs
+  ensures:
+    - name: contains_once
+      expr: "count(out, x) == 1"
+    - name: keeps_the_rest
+      expr: "all(y in xs: count(out, y) == 1)"
+    - name: grows_by_at_most_one
+      expr: "len(out) <= len(xs) + 1"
+examples:
+  - { input: { xs: [1, 2], x: 3 }, out: [1, 2, 3] }
+  - { input: { xs: [1, 2, 3], x: 2 }, out: [1, 2, 3] }
+variants:
+  ok:
+    bug: none
+    code: |
+      /** Push x onto xs unless it is already there. Mutates xs. */
+      export function addUnique(xs: number[], x: number): void {
+        if (!xs.includes(x)) xs.push(x);
+      }
+  always_push:
+    bug: no duplicate check
+    code: |
+      /** Push x onto xs unless it is already there. Mutates xs. */
+      export function addUnique(xs: number[], x: number): void {
+        xs.push(x);
+      }
+  returns_copy:
+    bug: returns a new list and leaves the caller's list unchanged
+    code: |
+      /** Push x onto xs unless it is already there. Mutates xs. */
+      export function addUnique(xs: number[], x: number): number[] {
+        return xs.includes(x) ? xs : [...xs, x];
+      }
+  skips_last:
+    bug: the duplicate check skips the last item, so re-adding the newest one duplicates it
+    code: |
+      /** Push x onto xs unless it is already there. Mutates xs. */
+      export function addUnique(xs: number[], x: number): void {
+        if (!xs.slice(0, -1).includes(x)) xs.push(x);
+      }

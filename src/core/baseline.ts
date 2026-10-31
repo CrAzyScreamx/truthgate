@@ -9,12 +9,10 @@ import { commitOf } from './diff.ts';
 // ponytail: the agent runs as the same OS user and could still find and edit this file; a keyed
 // store (OS keychain) is the upgrade if that ever matters.
 
-export type BaselineSource = 'approve' | 'clean-run' | 'head';
+export type BaselineSource = 'auto' | 'clean-run' | 'accept' | 'head';
 
 interface BaselineRecord {
   baseline: string | null;
-  /** sha256 of approved.json (LF-normalized) as written by `approve`. */
-  approvedSha?: string;
   source?: Exclude<BaselineSource, 'head'>;
   updatedAt: string;
 }
@@ -32,27 +30,18 @@ export async function readRecord(root: string): Promise<BaselineRecord | undefin
   }
 }
 
-/** The commit tamper/approval/config rules compare against. Falls back to HEAD (source 'head') when
- *  nothing is recorded or the recorded commit is gone; commit is '' when the repo has no commits. */
+/** The commit tamper/config rules and spec-change warnings compare against. Falls back to HEAD (source 'head')
+ *  when nothing is recorded or the recorded commit is gone; commit is '' when the repo has no commits. */
 export async function readBaseline(root: string): Promise<{ commit: string; source: BaselineSource }> {
   const rec = await readRecord(root);
   const recorded = rec?.baseline ? await commitOf(root, rec.baseline) : undefined;
-  if (recorded) return { commit: recorded, source: rec?.source ?? 'approve' };
+  if (recorded) return { commit: recorded, source: rec?.source ?? 'auto' };
   return { commit: (await commitOf(root, 'HEAD')) ?? '', source: 'head' };
 }
 
-export async function writeBaseline(
-  root: string,
-  patch: { commit?: string; approvedSha?: string; source?: Exclude<BaselineSource, 'head'> },
-): Promise<void> {
+export async function writeBaseline(root: string, rec: { commit: string; source: Exclude<BaselineSource, 'head'> }): Promise<void> {
   const file = await recordPath(root);
-  const rec: BaselineRecord = { baseline: null, updatedAt: '', ...(await readRecord(root)) };
-  if (patch.commit !== undefined) {
-    rec.baseline = patch.commit;
-    rec.source = patch.source ?? 'approve';
-  }
-  if (patch.approvedSha !== undefined) rec.approvedSha = patch.approvedSha;
-  rec.updatedAt = new Date().toISOString();
   await mkdir(join(file, '..'), { recursive: true });
-  await writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+  const out: BaselineRecord = { baseline: rec.commit, source: rec.source, updatedAt: new Date().toISOString() };
+  await writeFile(file, JSON.stringify(out, null, 2) + '\n');
 }

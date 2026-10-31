@@ -106,7 +106,7 @@ async function runFunctionProp(spec: Spec, p: Property, ast: Expr, caller: Funct
     try {
       skip = !reqs.every((r) => truth(expr.evaluate(r, { ...input }), 'requires'));
       if (!skip) {
-        res = await timed(caller.call(fn, input), opts.deadline);
+        res = await timed(caller.call(fn, input, spec.observe), opts.deadline);
         if (!res.ok) skip = res.kind === 'rejected' || !!spec.allowCrash;
       }
     } catch (e) {
@@ -172,7 +172,7 @@ async function runSequenceProp(spec: Spec, p: Property, ast: Expr, caller: Funct
     if (abort) return true;
     trace = [];
     try {
-      await timed(caller.reset(), opts.deadline);
+      await timed(caller.reset(spec.init), opts.deadline);
     } catch (e) {
       abort = abortReason(e);
       return true;
@@ -202,7 +202,8 @@ export async function runSpec(spec: Spec, root: string, opts: RunOptions): Promi
   if (avail !== true) return whole(avail);
 
   let note = '';
-  if (spec.lang === 'python' && spec.kind === 'function' && opts.config.python.native) {
+  // ponytail: the native Hypothesis harness doesn't do `observe`; such specs take the shim path.
+  if (spec.lang === 'python' && spec.kind === 'function' && opts.config.python.native && !spec.observe) {
     const r = await runHypothesis(spec, root, { ...opts, runs });
     if (typeof r !== 'string') return r;
     note = ` [native Hypothesis path unavailable, used the shim: ${r}]`;

@@ -1,11 +1,9 @@
-# Known issues and limits (v0.1)
+# Known issues and limits
 
 ## Trust boundary
-- **Same-user forgery is possible on purpose.** Approvals and the tamper baseline live outside the repo, in `~/.truthgate` (or `TRUTHGATE_HOME`).
-  - An agent that edits approved.json, weakens an approved spec, or commits with `--no-verify` is detected.
-  - An agent running as your OS user that deliberately rewrites the store can still forge an approval. No local, file-based scheme can prevent that. The goal is that tampering can't happen by accident or casually, and always takes a deliberate act.
-- **Deleting the store:** an agent that deletes its record in `~/.truthgate/repos/` makes verify fall back to comparing against `HEAD`. Every run then warns ("no truthgate baseline recorded"), and a clean run never creates a new record (only `approve` does). So a forgery committed this way is flagged on every run but not blocked.
-- **`approve` checks for a TTY.** A process that allocates a pseudo-terminal can get past that check. Same boundary as above.
+- **Specs need no approval, so an agent can weaken one.** truthgate can't stop that; it makes it visible. Every spec edited or deleted since the baseline is listed as `SPEC EDIT` in the report, and in the stop hook's message to the user (Claude Code, Codex, Gemini; stderr for the others). It doesn't block.
+- **Test and config tampering blocks.** The baseline commit lives outside the repo, in `~/.truthgate` (or `TRUTHGATE_HOME`), so an agent that removes assertions, skips or deletes tests, or edits `.truthgate/config.json` is caught even after committing with `--no-verify`. `npx truthgate accept` (no TTY needed) moves the baseline to HEAD when such a change was intentional; the rules tell agents never to run it, and nothing else enforces that.
+- **Deleting the store:** an agent that deletes its record in `~/.truthgate/repos/` gets a fresh baseline at HEAD on the next run, which hides what it committed before. That run says so ("recorded the truthgate baseline at ..."). An agent running as your OS user can always rewrite this file; no local, file-based scheme prevents that.
 - **Loop counter:** `.truthgate/state.json` lives in the repo. An agent can preset it to reach the cap early. The only effect is an early allowed stop with the loud unresolved-failures report.
 
 ## Coverage
@@ -15,6 +13,8 @@
 - **Tamper detection** is line-based. It strips line comments but not block comments or docstrings, and it doesn't detect dead code such as asserts moved under `if False:`. A sufficiently creative assertion rewrite can evade it.
 
 ## Language adapters
+- **TS/JS targets load through tsx** with the project's `tsconfig.json`. Importing a target runs its imports' top-level code, so modules with side effects on import (DB connections, env checks) fail to load and come back `UNVERIFIED` with the error. Deep mode's mutation copies exclude `node_modules`, so mutants of targets that import npm packages can't load.
+- **`observe` and `init`** (mutated arguments, constructor arguments) are implemented in the generic JS/TS and Python shims only. Java, C#, Go and Rust specs reject them; wrap the target in a helper instead. Function arguments (callbacks, injected services) can't be passed from a spec at all.
 - **Java:** compiles the target with `javac -sourcepath`. Projects that need external jars must set `spec.shim.command`.
 - **Go, Rust, C# sequence specs:** private and unexported fields are invisible, so expose a `State()`/`state()` method.
 - **JSON numbers:** decimals cross the shim as floats rounded to `places`. Integers compare exactly. Other numbers use a 1e-12 relative tolerance: it absorbs float drift from summing up to ~10,000 terms and still sees a 1-cent error on totals up to ~10 billion. Beyond that, compare scaled integers (cents) in the spec.

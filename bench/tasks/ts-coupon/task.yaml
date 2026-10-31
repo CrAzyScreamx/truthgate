@@ -1,0 +1,53 @@
+title: Cart price after a percentage coupon (discount rounded down) and then a fixed amount off; never below zero
+target: src/coupon.ts
+spec: |
+  id: cart.coupon
+  target: src/coupon.ts::applyCoupon
+  lang: ts
+  inputs:
+    subtotal: int[0,50000]
+    pct: int[0,100]
+    fixedOff: int[0,20000]
+  ensures:
+    - name: bounds
+      expr: "out >= 0 and out <= subtotal"
+    - name: exact
+      expr: "out == max(0, subtotal - (subtotal * pct - (subtotal * pct) % 100) / 100 - fixedOff)"
+examples:
+  - { input: { subtotal: 10000, pct: 10, fixedOff: 0 }, out: 9000 }
+  - { input: { subtotal: 10000, pct: 0, fixedOff: 500 }, out: 9500 }
+  - { input: { subtotal: 5000, pct: 0, fixedOff: 0 }, out: 5000 }
+  - { input: { subtotal: 10000, pct: 20, fixedOff: 1000 }, out: 7000 }
+variants:
+  ok:
+    bug: none
+    code: |
+      /** Price after a percentage coupon (discount rounded down to the cent), then a fixed amount off; never below zero. */
+      export function applyCoupon(subtotal: number, pct: number, fixedOff: number): number {
+        const discount = Math.floor((subtotal * pct) / 100);
+        return Math.max(0, subtotal - discount - fixedOff);
+      }
+  no_floor:
+    bug: a fixed coupon larger than the price makes the total negative
+    code: |
+      /** Price after a percentage coupon (discount rounded down to the cent), then a fixed amount off; never below zero. */
+      export function applyCoupon(subtotal: number, pct: number, fixedOff: number): number {
+        const discount = Math.floor((subtotal * pct) / 100);
+        return subtotal - discount - fixedOff;
+      }
+  round_discount:
+    bug: the percentage discount is rounded to nearest instead of down
+    code: |
+      /** Price after a percentage coupon (discount rounded down to the cent), then a fixed amount off; never below zero. */
+      export function applyCoupon(subtotal: number, pct: number, fixedOff: number): number {
+        const discount = Math.round((subtotal * pct) / 100);
+        return Math.max(0, subtotal - discount - fixedOff);
+      }
+  fixed_first:
+    bug: takes the fixed amount off before the percentage
+    code: |
+      /** Price after a percentage coupon (discount rounded down to the cent), then a fixed amount off; never below zero. */
+      export function applyCoupon(subtotal: number, pct: number, fixedOff: number): number {
+        const rest = Math.max(0, subtotal - fixedOff);
+        return rest - Math.floor((rest * pct) / 100);
+      }

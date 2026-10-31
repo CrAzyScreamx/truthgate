@@ -7,6 +7,7 @@ export function report(blocking: boolean): RunReport {
       : [{ specId: 'sort.basic', property: 'sorted', kind: 'TESTED', detail: '100 runs, failure rate < 3%', durationMs: 5 }],
     tamper: [],
     warnings: [],
+    specChanges: [],
     changedFiles: ['src/sort.py'],
     blocking,
     durationMs: 10,

@@ -1,0 +1,168 @@
+title: Bounded FIFO queue (capacity 3); push when full and pop when empty are refused (C# port of ts-queue)
+target: BoundedQueue.cs
+files:
+  Bench.csproj: |
+    <Project Sdk="Microsoft.NET.Sdk">
+      <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+      </PropertyGroup>
+    </Project>
+spec: |
+  id: queue.bounded
+  target: BoundedQueue.cs::BoundedQueue
+  lang: csharp
+  kind: sequence
+  ops:
+    - name: push
+      inputs: { x: "int[0,9]" }
+    - name: pop
+      inputs: {}
+  invariant:
+    - name: within_capacity
+      expr: "len(state.items) <= state.capacity"
+    - name: size_matches
+      expr: "state.size == len(state.items)"
+examples:
+  - steps:
+      - { op: push, input: { x: 1 } }
+      - { op: push, input: { x: 2 } }
+      - { op: pop, input: {}, out: 1 }
+    state: { items: [2], size: 1, capacity: 3 }
+  - steps:
+      - { op: push, input: { x: 1 } }
+      - { op: push, input: { x: 2 } }
+      - { op: push, input: { x: 3 } }
+      - { op: push, input: { x: 4 }, rejected: true }
+  - steps:
+      - { op: pop, input: {}, rejected: true }
+variants:
+  ok:
+    bug: none
+    code: |
+      namespace Bench;
+
+      public class Rejected(string message) : Exception(message);
+
+      /// <summary>FIFO queue holding at most Capacity items. Push when full and pop when empty are refused.</summary>
+      public class BoundedQueue
+      {
+          private readonly List<int> _items = [];
+          private int _size;
+          public int Capacity { get; } = 3;
+
+          public void Push(int x)
+          {
+              if (_size >= Capacity) throw new Rejected("queue is full");
+              _items.Add(x);
+              _size++;
+          }
+
+          public int Pop()
+          {
+              if (_size == 0) throw new Rejected("queue is empty");
+              _size--;
+              var x = _items[0];
+              _items.RemoveAt(0);
+              return x;
+          }
+
+          public object State() => new { items = _items, size = _size, capacity = Capacity };
+      }
+  full_off_by_one:
+    bug: the full check uses > instead of >=, so a fourth item fits
+    code: |
+      namespace Bench;
+
+      public class Rejected(string message) : Exception(message);
+
+      /// <summary>FIFO queue holding at most Capacity items. Push when full and pop when empty are refused.</summary>
+      public class BoundedQueue
+      {
+          private readonly List<int> _items = [];
+          private int _size;
+          public int Capacity { get; } = 3;
+
+          public void Push(int x)
+          {
+              if (_size > Capacity) throw new Rejected("queue is full");
+              _items.Add(x);
+              _size++;
+          }
+
+          public int Pop()
+          {
+              if (_size == 0) throw new Rejected("queue is empty");
+              _size--;
+              var x = _items[0];
+              _items.RemoveAt(0);
+              return x;
+          }
+
+          public object State() => new { items = _items, size = _size, capacity = Capacity };
+      }
+  pop_empty_counter:
+    bug: pop decrements the size counter before refusing an empty queue
+    code: |
+      namespace Bench;
+
+      public class Rejected(string message) : Exception(message);
+
+      /// <summary>FIFO queue holding at most Capacity items. Push when full and pop when empty are refused.</summary>
+      public class BoundedQueue
+      {
+          private readonly List<int> _items = [];
+          private int _size;
+          public int Capacity { get; } = 3;
+
+          public void Push(int x)
+          {
+              if (_size >= Capacity) throw new Rejected("queue is full");
+              _items.Add(x);
+              _size++;
+          }
+
+          public int Pop()
+          {
+              _size--;
+              if (_items.Count == 0) throw new Rejected("queue is empty");
+              var x = _items[0];
+              _items.RemoveAt(0);
+              return x;
+          }
+
+          public object State() => new { items = _items, size = _size, capacity = Capacity };
+      }
+  lifo:
+    bug: pop returns the newest item (the spec does not check pop's return value)
+    code: |
+      namespace Bench;
+
+      public class Rejected(string message) : Exception(message);
+
+      /// <summary>FIFO queue holding at most Capacity items. Push when full and pop when empty are refused.</summary>
+      public class BoundedQueue
+      {
+          private readonly List<int> _items = [];
+          private int _size;
+          public int Capacity { get; } = 3;
+
+          public void Push(int x)
+          {
+              if (_size >= Capacity) throw new Rejected("queue is full");
+              _items.Add(x);
+              _size++;
+          }
+
+          public int Pop()
+          {
+              if (_size == 0) throw new Rejected("queue is empty");
+              _size--;
+              var x = _items[^1];
+              _items.RemoveAt(_items.Count - 1);
+              return x;
+          }
+
+          public object State() => new { items = _items, size = _size, capacity = Capacity };
+      }

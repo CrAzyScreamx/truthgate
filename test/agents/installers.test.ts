@@ -50,8 +50,8 @@ test('stop hooks and MCP configs are wired with the truthgate commands', async (
   const gemini = JSON.parse(await read(root, '.gemini/settings.json'));
   assert.equal(gemini.hooks.AfterAgent[0].hooks[0].command, 'npx -y truthgate hook --agent gemini');
   assert.ok(gemini.mcpServers.truthgate);
-  const cmd = parseToml(await read(root, '.gemini/commands/truthgate-approve.toml')) as { prompt: string; description: string };
-  assert.match(cmd.prompt, /npx truthgate approve/);
+  const cmd = parseToml(await read(root, '.gemini/commands/truthgate-verify.toml')) as { prompt: string; description: string };
+  assert.match(cmd.prompt, /truthgate verify/);
   assert.ok(cmd.description);
   const copilot = JSON.parse(await read(root, '.github/hooks/truthgate.json'));
   assert.equal(copilot.version, 1);

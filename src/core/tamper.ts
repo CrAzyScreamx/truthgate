@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { LanguageAdapter, TamperFinding } from '../contract.ts';
+import type { LanguageAdapter, Spec, TamperFinding } from '../contract.ts';
 import { showAt } from './diff.ts';
 import { readBaseline } from './baseline.ts';
 import { matchesAny } from './glob.ts';
+import { CONFIG_FILE } from './config.ts';
 
 /** Assertions that check nothing. Flagged when newly added. */
 export const CONSTANT_ASSERTS: RegExp[] = [
@@ -39,7 +40,7 @@ function extra(a: string[], b: string[], pred: (l: string) => boolean): { line: 
 
 /** Test-file rules vs the baseline commit: assert-removed (an assertion line removed or changed, or a
  *  new constant assertion), skip-added (also in new test files), test-deleted.
- *  Spec/approval/config rules live in checkApprovals. */
+ *  The config rule is checkConfig; spec edits are warnings (specChanges), not tamper. */
 export async function detectTamper(root: string, changed: string[], adapters?: LanguageAdapter[], base?: string): Promise<TamperFinding[]> {
   adapters ??= (await import('../lang/index.ts')).adapters;
   base ??= (await readBaseline(root)).commit;
@@ -73,4 +74,30 @@ export async function detectTamper(root: string, changed: string[], adapters?: L
     if (added.length) findings.push({ file, line: added[0]!.line, rule: 'skip-added', detail: `new skip marker: ${added[0]!.text}` });
   }
   return findings;
+}
+
+const lf = (t: string | undefined) => t?.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+
+/** config-edited: .truthgate/config.json differs from the baseline commit (budget, runs, globs and seed all weaken checks). */
+export async function checkConfig(root: string, base: string): Promise<TamperFinding[]> {
+  const now = lf(await readFile(join(root, CONFIG_FILE), 'utf8').catch(() => undefined));
+  if (now === lf(await showAt(root, base, CONFIG_FILE))) return [];
+  const detail = `${CONFIG_FILE} differs from the baseline commit; if the user made this change, they commit it and run \`npx truthgate accept\``;
+  return [{ file: CONFIG_FILE, rule: 'config-edited', detail }];
+}
+
+/** Specs edited or deleted since the baseline. Not blocking (specs need no approval), but weakening a spec is
+ *  how an agent would dodge a FALSIFIED, so reports and stop hooks show these loudly. */
+export async function specChanges(root: string, specs: Spec[], changed: string[], base: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const f of changed) {
+    if (!f.startsWith('.truthgate/specs/') || !/\.ya?ml$/.test(f)) continue;
+    const old = await showAt(root, base, f);
+    if (old === undefined) continue; // a new spec
+    const spec = specs.find((x) => x.file === f);
+    if (!spec) out.push(`spec file ${f} was deleted since the baseline ${base.slice(0, 7)}`);
+    else if (lf(old) !== lf(await readFile(join(root, f), 'utf8')))
+      out.push(`spec ${spec.id} (${f}) was changed since the baseline ${base.slice(0, 7)}: check it was not weakened`);
+  }
+  return out;
 }

@@ -1,7 +1,7 @@
 import { stringify } from 'smol-toml';
 import type { AgentInstaller } from '../contract.ts';
 import { commands, decisionOutput, hookCommand, json, mcp, rules, skills } from './common.ts';
-import { blockReason, cappedMessage } from './summary.ts';
+import { blockReason, cappedMessage, specEditMessage } from './summary.ts';
 
 export const gemini: AgentInstaller = {
   id: 'gemini',
@@ -26,6 +26,7 @@ export const gemini: AgentInstaller = {
   hookOutput(report, capped) {
     if (capped) return { stdout: JSON.stringify({ decision: 'allow', systemMessage: cappedMessage(report) }) + '\n', exitCode: 0 };
     if (report.blocking) return decisionOutput('deny', blockReason(report));
-    return { stdout: JSON.stringify({ decision: 'allow' }) + '\n', exitCode: 0 };
+    const edits = specEditMessage(report);
+    return { stdout: JSON.stringify({ decision: 'allow', ...(edits && { systemMessage: edits }) }) + '\n', exitCode: 0 };
   },
 };

@@ -64,6 +64,18 @@ test('a pass resets the count', async () => {
   assert.equal(state.consecutiveBlocks, 0);
 });
 
+test('an allowed stop with spec edits tells the user (systemMessage), without blocking', async () => {
+  const edited = { ...report(false), specChanges: ['spec sort.basic (.truthgate/specs/s.yaml) was changed since the baseline abc1234: check it was not weakened'] };
+  const d: HookDeps = { ...deps([]).d, verify: async () => edited };
+  const c = JSON.parse((await runHookWith(claude, '{}', '.', d)).stdout);
+  assert.equal(c.decision, undefined);
+  assert.match(c.systemMessage, /specs were edited since the baseline[\s\S]*- spec sort\.basic/);
+  const g = JSON.parse((await runHookWith(installers.gemini, '{}', '.', d)).stdout);
+  assert.equal(g.decision, 'allow');
+  assert.match(g.systemMessage, /spec sort\.basic/);
+  assert.deepEqual(await runHookWith(claude, '{}', '.', deps([false]).d), { stdout: '', exitCode: 0 }); // no edits: silent
+});
+
 test('a fresh turn (stop_hook_active false / loop_count 0) starts a new chain', async () => {
   const { d, state } = deps([true, true], 3);
   assert.equal(decision((await runHookWith(claude, '{"stop_hook_active":false}', '.', d)).stdout), 'block');

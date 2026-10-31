@@ -5,7 +5,7 @@ import type { AgentId, FileChange } from '../contract.ts';
 
 const assets = fileURLToPath(new URL('../../assets/', import.meta.url));
 export const SKILLS = ['truthgate-spec', 'truthgate-shim', 'truthgate-verdicts'];
-export const COMMANDS = ['truthgate-verify', 'truthgate-approve'];
+export const COMMANDS = ['truthgate-verify', 'truthgate-review'];
 
 export const hookCommand = (id: AgentId) => `npx -y truthgate hook --agent ${id}`;
 
@@ -18,9 +18,9 @@ export const mcp: { command: string; args: string[] } =
 export const json = (o: unknown) => JSON.stringify(o, null, 2) + '\n';
 
 export const RULES = `## truthgate
-This repo checks agent-written code against user-approved property specs with truthgate.
-- Before changing logic that has a clear contract, write or update a spec in \`.truthgate/specs/\` (skill: truthgate-spec).
-- Only the user can approve specs: ask them to run \`npx truthgate approve\`. Never edit \`.truthgate/approved.json\`.
+This repo checks agent-written code against property specs with truthgate.
+- Before changing logic that has a clear contract, write or update a spec in \`.truthgate/specs/\` (skill: truthgate-spec). A spec counts as soon as it exists.
+- Never edit or delete an existing spec to get a pass: truthgate reports every spec edit to the user. Never run \`truthgate accept\`; that is the user's call.
 - Before you say you are done, run \`npx -y truthgate verify\` (or the truthgate MCP \`verify\` tool) and act on the verdicts (skill: truthgate-verdicts).
 - FALSIFIED means fix the code. Never weaken specs, skip tests or delete assertions to get a pass.
 - Report verdicts exactly as worded: TESTED is not "proven", and UNVERIFIED is not a pass.

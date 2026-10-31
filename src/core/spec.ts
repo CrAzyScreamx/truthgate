@@ -50,7 +50,7 @@ export function parseSpec(text: string, file: string): Spec {
     throw new SpecError(file, field, msg);
   };
   if (!isObj(raw)) return bad('(root)', 'expected a mapping');
-  const known = ['id', 'target', 'lang', 'kind', 'inputs', 'requires', 'ensures', 'ops', 'invariant', 'runs', 'allowCrash', 'prove', 'shim'];
+  const known = ['id', 'target', 'lang', 'kind', 'inputs', 'requires', 'ensures', 'ops', 'invariant', 'observe', 'init', 'runs', 'allowCrash', 'prove', 'shim'];
   for (const k of Object.keys(raw)) if (!known.includes(k)) bad(k, 'unknown field');
 
   const str = (v: unknown, field: string) => (typeof v === 'string' && v.trim() ? v : bad(field, 'expected a non-empty string'));
@@ -126,6 +126,21 @@ export function parseSpec(text: string, file: string): Spec {
     if (spec.invariant.length === 0) bad('invariant', 'a sequence spec needs at least one invariant');
   }
 
+  // ponytail: only the generic js/ts/python shims implement observe/init; the others add them when someone needs it.
+  const generic = ['ts', 'js', 'python'].includes(lang);
+  const generics = `supported for ts, js and python only; for ${lang}, wrap the target in a small helper that returns the value to check`;
+  if (raw.observe !== undefined) {
+    if (kind !== 'function') bad('observe', 'is for function specs');
+    if (!generic) bad('observe', generics);
+    spec.observe = str(raw.observe, 'observe');
+    if (!Object.hasOwn(spec.inputs, spec.observe)) bad('observe', `must name one of the inputs (${Object.keys(spec.inputs).join(', ') || 'none'})`);
+  }
+  if (raw.init !== undefined) {
+    if (kind !== 'sequence') bad('init', 'is for sequence specs');
+    if (!generic) bad('init', generics.replace('returns the value to check', 'builds the object'));
+    if (!Array.isArray(raw.init)) bad('init', 'expected a list of constructor arguments (JSON values)');
+    spec.init = raw.init as unknown[];
+  }
   if (raw.runs !== undefined) {
     if (!Number.isInteger(raw.runs) || (raw.runs as number) < 1) bad('runs', 'expected a positive integer');
     spec.runs = raw.runs as number;

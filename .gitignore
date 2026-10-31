@@ -16,3 +16,4 @@ fixtures/**/.hypothesis/
 *.vos
 *.glob
 .*.aux
+bench/RESULTS.partial.md

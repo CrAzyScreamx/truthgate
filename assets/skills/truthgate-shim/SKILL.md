@@ -5,7 +5,7 @@ description: Create or fix the truthgate shim that lets the verifier call Python
 
 # truthgate shims
 
-JS/TS targets are imported directly and need no shim. Every other language talks to the verifier
+JS/TS targets need no shim: a bundled one loads them with tsx and the project's `tsconfig.json`. Every other language talks to the verifier
 through a small **shim**: a program that reads JSON Lines on stdin and answers on stdout.
 Python may also run natively through Hypothesis when it is installed; the shim is the fallback.
 
@@ -20,8 +20,9 @@ pass `--force`. The MCP `shim_template` tool returns the same source and path wi
 
 ## Protocol (one persistent process per spec run)
 Requests, one JSON object per line:
-- `{"op":"call","fn":"sort_list","input":{"xs":[3,1]}}`: call `fn` with named inputs.
-- `{"op":"reset"}`: sequence specs. Start from a fresh instance.
+- `{"op":"call","fn":"sort_list","input":{"xs":[3,1]}}`: call `fn` with named inputs. With `"observe":"xs"` (spec `observe:`),
+  reply with that argument after the call instead of the return value.
+- `{"op":"reset"}`: sequence specs. Start from a fresh instance; `"args":[..]` (spec `init:`) are constructor arguments.
 - `{"op":"state"}`: sequence specs. Return a JSON snapshot of the instance.
 
 Responses, exactly one line per request:

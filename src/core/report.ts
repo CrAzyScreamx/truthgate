@@ -30,6 +30,7 @@ export function formatReport(r: RunReport): string {
     out.push(`${'MUTATION'.padEnd(w0)}  caught ${m.caught}/${m.total} mutants`);
     for (const s of m.survivors) out.push(`${''.padEnd(w0)}  survived: ${s.file}:${s.line} ${s.desc}`);
   }
+  for (const c of r.specChanges ?? []) out.push(`${'SPEC EDIT'.padEnd(w0)}  ${c}`);
   for (const w of r.warnings) out.push(`${'WARN'.padEnd(w0)}  ${w}`);
   if (out.length === 0) out.push('No specs ran: no changed file has a spec.');
 
@@ -37,7 +38,8 @@ export function formatReport(r: RunReport): string {
     .map((k) => [k, all.filter((v) => v.kind === k).length] as const)
     .filter(([, n]) => n)
     .map(([k, n]) => `${n} ${KIND_LABEL[k]}`);
-  const summary = [counts.join(', ') || 'no verdicts', plural(r.tamper.length, 'tamper finding'), plural(r.warnings.length, 'warning')].join(' · ');
+  const edits = r.specChanges?.length ? [plural(r.specChanges.length, 'spec edit')] : [];
+  const summary = [counts.join(', ') || 'no verdicts', plural(r.tamper.length, 'tamper finding'), ...edits, plural(r.warnings.length, 'warning')].join(' · ');
   const falsified = all.filter((v) => v.kind === 'FALSIFIED').length;
   const why = [falsified && plural(falsified, 'FALSIFIED verdict'), r.tamper.length && plural(r.tamper.length, 'tamper finding')].filter(Boolean).join(' and ');
   out.push('', `${summary} · ${(r.durationMs / 1000).toFixed(1)}s`);

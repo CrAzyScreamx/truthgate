@@ -1,6 +1,6 @@
 import type { AgentInstaller } from '../contract.ts';
 import { commands, decisionOutput, hookCommand, json, mcp, rules, skills } from './common.ts';
-import { blockReason, cappedMessage } from './summary.ts';
+import { blockReason, cappedMessage, specEditMessage } from './summary.ts';
 
 export const claude: AgentInstaller = {
   id: 'claude',
@@ -23,6 +23,7 @@ export const claude: AgentInstaller = {
   hookOutput(report, capped) {
     if (capped) return { stdout: JSON.stringify({ systemMessage: cappedMessage(report) }) + '\n', exitCode: 0 };
     if (report.blocking) return decisionOutput('block', blockReason(report));
-    return { stdout: '', exitCode: 0 };
+    const edits = specEditMessage(report);
+    return { stdout: edits ? JSON.stringify({ systemMessage: edits }) + '\n' : '', exitCode: 0 };
   },
 };

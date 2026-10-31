@@ -1,0 +1,69 @@
+title: Split a payment into n parts that differ by at most one cent, larger parts first (Rust port of py-split)
+target: src/split.rs
+files:
+  Cargo.toml: |
+    [package]
+    name = "bench"
+    version = "0.1.0"
+    edition = "2021"
+
+    [dependencies]
+  src/lib.rs: |
+    pub mod split;
+spec: |
+  id: money.split
+  target: src/split.rs::split_cents
+  lang: rust
+  inputs:
+    total: int[0,100000]
+    n: int[1,12]
+  ensures:
+    - name: conserves
+      expr: "sum(out) == total"
+    - name: count
+      expr: "len(out) == n"
+    - name: fair
+      expr: "max(out) - min(out) <= 1"
+    - name: larger_first
+      expr: "all(i in range(len(out) - 1): out[i] >= out[i + 1])"
+examples:
+  - { input: { total: 100, n: 4 }, out: [25, 25, 25, 25] }
+  - { input: { total: 100, n: 3 }, out: [34, 33, 33] }
+  - { input: { total: 0, n: 3 }, out: [0, 0, 0] }
+  - { input: { total: 7, n: 1 }, out: [7] }
+variants:
+  ok:
+    bug: none
+    code: |
+      /// Split `total` cents into `n` parts that differ by at most one cent, larger parts first.
+      pub fn split_cents(total: i64, n: i64) -> Vec<i64> {
+          let (q, r) = (total / n, total % n);
+          (0..n).map(|i| if i < r { q + 1 } else { q }).collect()
+      }
+  remainder_to_first:
+    bug: the whole remainder goes to the first part
+    code: |
+      /// Split `total` cents into `n` parts that differ by at most one cent, larger parts first.
+      pub fn split_cents(total: i64, n: i64) -> Vec<i64> {
+          let mut parts = vec![total / n; n as usize];
+          parts[0] += total % n;
+          parts
+      }
+  float_round:
+    bug: rounds total/n half away from zero; the last part absorbs the difference
+    code: |
+      /// Split `total` cents into `n` parts that differ by at most one cent, larger parts first.
+      pub fn split_cents(total: i64, n: i64) -> Vec<i64> {
+          let base = (total as f64 / n as f64).round() as i64;
+          let mut parts = vec![base; (n - 1) as usize];
+          parts.push(total - base * (n - 1));
+          parts.sort_by(|a, b| b.cmp(a));
+          parts
+      }
+  drop_remainder:
+    bug: integer division; the remainder is lost
+    code: |
+      /// Split `total` cents into `n` parts that differ by at most one cent, larger parts first.
+      pub fn split_cents(total: i64, n: i64) -> Vec<i64> {
+          vec![total / n; n as usize]
+      }

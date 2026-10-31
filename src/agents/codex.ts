@@ -1,7 +1,7 @@
 import { stringify } from 'smol-toml';
 import type { AgentInstaller } from '../contract.ts';
 import { decisionOutput, hookCommand, json, mcp, rules, skills } from './common.ts';
-import { blockReason, cappedMessage } from './summary.ts';
+import { blockReason, cappedMessage, specEditMessage } from './summary.ts';
 
 export const codex: AgentInstaller = {
   id: 'codex',
@@ -26,6 +26,7 @@ export const codex: AgentInstaller = {
     // Plain-text stdout is invalid for Codex Stop hooks; always JSON or nothing.
     if (capped) return { stdout: JSON.stringify({ systemMessage: cappedMessage(report) }) + '\n', exitCode: 0 };
     if (report.blocking) return decisionOutput('block', blockReason(report));
-    return { stdout: '', exitCode: 0 };
+    const edits = specEditMessage(report);
+    return { stdout: edits ? JSON.stringify({ systemMessage: edits }) + '\n' : '', exitCode: 0 };
   },
 };

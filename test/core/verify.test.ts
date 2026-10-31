@@ -79,7 +79,7 @@ test('verify: selects by changed target, warns, shares the deadline, blocks on F
   assert.deepEqual(r.tamper, []);
   assert.ok(r.warnings.some((w) => w === 'src/c.py changed but has no spec: UNVERIFIED (no spec)'));
   assert.ok(!r.warnings.some((w) => w.includes('test_new')));
-  assert.ok(r.warnings.some((w) => /spec a is not approved/.test(w)));
+  assert.ok(r.warnings.some((w) => /recorded the truthgate baseline/.test(w)));
   assert.deepEqual(JSON.parse(await readFile(join(root, LAST_RUN_FILE), 'utf8')).verdicts, r.verdicts);
 
   // --all runs every spec; a zero budget turns unstarted specs into UNVERIFIED (timeout).
@@ -124,7 +124,7 @@ test('verify outside git runs everything and warns', async () => {
   assert.match(r.warnings[0]!, /not a git repository/);
 });
 
-const base: RunReport = { verdicts: [], tamper: [], warnings: [], changedFiles: [], blocking: false, durationMs: 1234 };
+const base: RunReport = { verdicts: [], tamper: [], warnings: [], specChanges: [], changedFiles: [], blocking: false, durationMs: 1234 };
 
 test('formatReport', () => {
   assert.match(formatReport(base), /No specs ran[\s\S]*no verdicts · 0 tamper findings · 0 warnings · 1\.2s\nOK: nothing blocking\./);
@@ -153,19 +153,7 @@ test('formatReport', () => {
   assert.match(text, /BLOCKING: 1 FALSIFIED verdict and 1 tamper finding\./);
 });
 
-const approveYes = async (root: string, answers: string) => {
-  const { runApprove } = await import('../../src/core/approve.ts');
-  const { PassThrough } = await import('node:stream');
-  const input = new PassThrough();
-  input.end(answers);
-  const output = new PassThrough();
-  let text = '';
-  output.on('data', (d) => (text += d));
-  assert.equal(await runApprove(root, { input, output, isTTY: true }), 0);
-  return text;
-};
-
-test('verify advances an approve-created baseline only on a clean, fully verified run with a clean tree', async () => {
+test('verify records the baseline on its first run, then advances it only on a clean, fully verified run with a clean tree', async () => {
   const { readBaseline } = await import('../../src/core/baseline.ts');
   const { commitOf } = await import('../../src/core/diff.ts');
   const { execFileSync } = await import('node:child_process');
@@ -173,47 +161,55 @@ test('verify advances an approve-created baseline only on a clean, fully verifie
   const root = await repo({ '.truthgate/specs/a.yaml': SPEC('a', 'src/a.py::f'), 'src/a.py': '1', '.gitignore': '.truthgate/last-run.json\n' });
   const ok = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, property: 'p', kind: 'TESTED', detail: 'ok', durationMs: 0 }];
   const unverified = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, kind: 'UNVERIFIED', detail: 'shim error', durationMs: 0 }];
-  const r0 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
-  assert.ok(r0.warnings.some((w) => /no truthgate baseline recorded/.test(w)));
-  assert.equal((await readBaseline(root)).source, 'head'); // a clean run never creates a record
-  await approveYes(root, 'y\n');
   const first = await commitOf(root, 'HEAD');
-  assert.deepEqual(await readBaseline(root), { commit: first, source: 'approve' });
-  git('add', '-A');
-  git('commit', '-qm', 'approve');
+  const r0 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.ok(r0.warnings.some((w) => /recorded the truthgate baseline at \w{7} \(HEAD\)/.test(w)));
+  assert.deepEqual(await readBaseline(root), { commit: first, source: 'auto' });
   await put(root, 'src/a.py', '2');
   await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] }); // dirty tree: no advance
   git('commit', '-qam', 'two');
   assert.equal((await readBaseline(root)).commit, first);
   await verify(root, {}, { runSpec: unverified, adapters: [pyAdapter] }); // UNVERIFIED: no advance
   assert.equal((await readBaseline(root)).commit, first);
-  assert.equal((await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] })).blocking, false);
+  const r1 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.equal(r1.blocking, false);
+  assert.ok(!r1.warnings.some((w) => /recorded the truthgate baseline/.test(w)), 'the record-once warning is not repeated');
   assert.deepEqual(await readBaseline(root), { commit: await commitOf(root, 'HEAD'), source: 'clean-run' });
-  // Once advanced, the warning goes away and the committed target no longer counts as changed.
-  const r2 = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
-  assert.ok(!r2.warnings.some((w) => /no truthgate baseline/.test(w)));
-  assert.deepEqual(r2.verdicts, []);
+  // Once advanced, the committed target no longer counts as changed.
+  assert.deepEqual((await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] })).verdicts, []);
 });
 
-test('R1-N1: deleting the record after committing a bug never launders the bug commit', async () => {
-  const { readBaseline, readRecord, recordPath } = await import('../../src/core/baseline.ts');
+test('a spec edit since the baseline is reported (even after a commit) but does not block', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const root = await repo({ '.truthgate/specs/a.yaml': SPEC('a', 'src/a.py::f'), 'src/a.py': '1', '.gitignore': '.truthgate/last-run.json\n' });
+  const ok = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, property: 'p', kind: 'TESTED', detail: 'ok', durationMs: 0 }];
+  await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] }); // records the baseline
+  await put(root, '.truthgate/specs/a.yaml', SPEC('a', 'src/a.py::f', 'true'));
+  execFileSync('git', ['commit', '-qam', 'weaken', '--no-verify'], { cwd: root });
+  const r = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.equal(r.blocking, false);
+  assert.deepEqual(r.tamper, []);
+  assert.equal(r.specChanges.length, 1);
+  assert.match(r.specChanges[0]!, /spec a .* was changed since the baseline/);
+  assert.match(formatReport(r), /SPEC EDIT\s+spec a/);
+});
+
+test('known limit: deleting the record re-records the baseline at HEAD, with a warning on that run', async () => {
+  const { readBaseline, recordPath } = await import('../../src/core/baseline.ts');
   const { rm } = await import('node:fs/promises');
   const { execFileSync } = await import('node:child_process');
   const git = (...a: string[]) => execFileSync('git', a, { cwd: root });
-  const root = await repo({ '.truthgate/specs/a.yaml': SPEC('a', 'src/a.py::f'), 'src/a.py': 'good', '.gitignore': '.truthgate/last-run.json\n' });
-  await approveYes(root, 'y\n');
-  git('add', '-A');
-  git('commit', '-qm', 'approve');
-  // The agent commits the bug and deletes the user-local record.
-  await put(root, 'src/a.py', 'bug');
-  git('commit', '-qam', 'bug', '--no-verify');
-  const bug = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-  await rm(await recordPath(root));
+  const root = await repo({ '.truthgate/specs/a.yaml': SPEC('a', 'src/a.py::f'), 'src/a.py': 'good', 'tests/test_a.py': 'assert 1\nassert 2\n', '.gitignore': '.truthgate/last-run.json\n' });
   const ok = async (s: Spec): Promise<Verdict[]> => [{ specId: s.id, property: 'p', kind: 'TESTED', detail: 'ok', durationMs: 0 }];
-  for (let i = 0; i < 2; i++) {
-    const r = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
-    assert.ok(r.warnings.some((w) => /no truthgate baseline recorded/.test(w)), `run ${i + 1} must still warn`);
-  }
-  assert.equal(await readRecord(root), undefined);
-  assert.deepEqual(await readBaseline(root), { commit: bug, source: 'head' }); // the fallback, never a trusted record
+  await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  // The agent guts a test and commits: still caught against the recorded baseline.
+  await put(root, 'tests/test_a.py', 'assert 1\n');
+  git('commit', '-qam', 'gut', '--no-verify');
+  assert.deepEqual((await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] })).tamper.map((t) => t.rule), ['assert-removed']);
+  // Deleting this machine's record is the documented way around it: the next run pins HEAD and says so.
+  await rm(await recordPath(root));
+  const r = await verify(root, {}, { runSpec: ok, adapters: [pyAdapter] });
+  assert.deepEqual(r.tamper, []);
+  assert.ok(r.warnings.some((w) => /recorded the truthgate baseline/.test(w)));
+  assert.equal((await readBaseline(root)).source, 'auto');
 });

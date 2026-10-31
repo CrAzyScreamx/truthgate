@@ -1,0 +1,160 @@
+title: NestJS-style retry policy (decorator, constructor parameter property, alias and extensionless imports, CommonJS); gives up after maxAttempts failures in a row
+target: src/retry.service.ts
+files:
+  tsconfig.json: |
+    { "compilerOptions": { "module": "commonjs", "target": "es2021", "experimentalDecorators": true, "emitDecoratorMetadata": true,
+      "baseUrl": ".", "paths": { "@app/*": ["src/*"] } } }
+  package.json: |
+    { "name": "nest-like", "private": true }
+  src/core/di.ts: |
+    export function Injectable(): ClassDecorator {
+      return () => {};
+    }
+  src/limits.ts: |
+    export const DEFAULT_MAX_ATTEMPTS = 5;
+spec: |
+  id: retry.policy
+  target: src/retry.service.ts::RetryPolicy
+  lang: ts
+  kind: sequence
+  init: [3]
+  ops:
+    - name: fail
+      inputs: {}
+    - name: succeed
+      inputs: {}
+  invariant:
+    - name: within_budget
+      expr: "state.attempts <= state.maxAttempts"
+    - name: gives_up_exactly_at_max
+      expr: "state.gaveUp == (state.attempts == state.maxAttempts)"
+    - name: uses_configured_max
+      expr: "state.maxAttempts == 3"
+examples:
+  - steps:
+      - { op: fail, input: {} }
+      - { op: fail, input: {} }
+      - { op: succeed, input: {} }
+    state: { attempts: 0, gaveUp: false, maxAttempts: 3 }
+  - steps:
+      - { op: fail, input: {} }
+      - { op: fail, input: {} }
+      - { op: fail, input: {} }
+      - { op: fail, input: {}, rejected: true }
+variants:
+  ok:
+    bug: none
+    code: |
+      import { Injectable } from '@app/core/di';
+      import { DEFAULT_MAX_ATTEMPTS } from './limits';
+
+      /** Counts consecutive failures; gives up after maxAttempts in a row. A success resets the count. */
+      @Injectable()
+      export class RetryPolicy {
+        private attempts = 0;
+        private gaveUp = false;
+
+        constructor(private readonly maxAttempts: number = DEFAULT_MAX_ATTEMPTS) {}
+
+        fail(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts++;
+          if (this.attempts >= this.maxAttempts) this.gaveUp = true;
+        }
+
+        succeed(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts = 0;
+        }
+
+        state() {
+          return { attempts: this.attempts, gaveUp: this.gaveUp, maxAttempts: this.maxAttempts };
+        }
+      }
+  off_by_one:
+    bug: gives up only after maxAttempts + 1 failures
+    code: |
+      import { Injectable } from '@app/core/di';
+      import { DEFAULT_MAX_ATTEMPTS } from './limits';
+
+      /** Counts consecutive failures; gives up after maxAttempts in a row. A success resets the count. */
+      @Injectable()
+      export class RetryPolicy {
+        private attempts = 0;
+        private gaveUp = false;
+
+        constructor(private readonly maxAttempts: number = DEFAULT_MAX_ATTEMPTS) {}
+
+        fail(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts++;
+          if (this.attempts > this.maxAttempts) this.gaveUp = true;
+        }
+
+        succeed(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts = 0;
+        }
+
+        state() {
+          return { attempts: this.attempts, gaveUp: this.gaveUp, maxAttempts: this.maxAttempts };
+        }
+      }
+  ignores_config:
+    bug: the constructor argument is ignored, so the default limit is always used
+    code: |
+      import { Injectable } from '@app/core/di';
+      import { DEFAULT_MAX_ATTEMPTS } from './limits';
+
+      /** Counts consecutive failures; gives up after maxAttempts in a row. A success resets the count. */
+      @Injectable()
+      export class RetryPolicy {
+        private attempts = 0;
+        private gaveUp = false;
+        private readonly maxAttempts = DEFAULT_MAX_ATTEMPTS;
+
+        constructor(_maxAttempts?: number) {}
+
+        fail(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts++;
+          if (this.attempts >= this.maxAttempts) this.gaveUp = true;
+        }
+
+        succeed(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts = 0;
+        }
+
+        state() {
+          return { attempts: this.attempts, gaveUp: this.gaveUp, maxAttempts: this.maxAttempts };
+        }
+      }
+  success_keeps_count:
+    bug: a success doesn't reset the count, so failures add up across successes (the invariants can't see it)
+    code: |
+      import { Injectable } from '@app/core/di';
+      import { DEFAULT_MAX_ATTEMPTS } from './limits';
+
+      /** Counts consecutive failures; gives up after maxAttempts in a row. A success resets the count. */
+      @Injectable()
+      export class RetryPolicy {
+        private attempts = 0;
+        private gaveUp = false;
+
+        constructor(private readonly maxAttempts: number = DEFAULT_MAX_ATTEMPTS) {}
+
+        fail(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+          this.attempts++;
+          if (this.attempts >= this.maxAttempts) this.gaveUp = true;
+        }
+
+        succeed(): void {
+          if (this.gaveUp) throw new RangeError('already gave up');
+        }
+
+        state() {
+          return { attempts: this.attempts, gaveUp: this.gaveUp, maxAttempts: this.maxAttempts };
+        }
+      }

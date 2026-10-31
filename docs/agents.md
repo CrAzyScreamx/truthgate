@@ -1,6 +1,6 @@
 # Agent integrations
 
-`npx truthgate init --agent <id>` merges these files into the repo. It never overwrites a different file and never removes your keys. It is idempotent, and `--dry-run` prints the plan without writing.
+`npx truthgate init` asks which agents to set up (or pass `--agent <id>`, repeatable), then merges these files into the repo. It never overwrites a different file and never removes your keys. It is idempotent, and `--dry-run` prints the plan without writing.
 Facts below were checked against each vendor's official docs on 2026-10-28. **UNCONFIRMED** marks anything the docs did not state clearly.
 
 Commands written into configs:
@@ -28,7 +28,7 @@ Merge rules:
 | Cline | `.cline/skills/` | global only, printed | `.clinerules/truthgate.md` | none | instruct-only |
 | Kiro | `.kiro/skills/` | `.kiro/settings/mcp.json` `mcpServers` | `.kiro/steering/truthgate.md` (`inclusion: always`) | none | instruct-only |
 
-The skills are copied from `assets/skills/` (`truthgate-spec`, `truthgate-shim` and `truthgate-verdicts`). The commands are `truthgate-verify` and `truthgate-approve`; the approve command only tells the user to run the CLI. The MCP server has no approve tool.
+The skills are copied from `assets/skills/` (`truthgate-spec`, `truthgate-shim` and `truthgate-verdicts`). The commands are `truthgate-verify` (check current changes) and `truthgate-review` (inventory the code, write specs, run `verify --all`). Specs need no approval. The MCP server has no `accept` tool: moving the baseline past test or config edits is the user's call.
 
 ## Stop-hook behaviour
 `truthgate hook --agent <id>` reads the agent's JSON payload on stdin and ignores fields it doesn't know. It runs `verify` and applies the loop cap (`loopCap`, default 3):

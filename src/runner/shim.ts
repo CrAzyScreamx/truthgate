@@ -59,19 +59,19 @@ export function openShim(command: string[], cwd: string, opts: { callTimeoutMs?:
       child.stdin!.write(JSON.stringify(msg) + '\n');
     });
 
-  const control = async (op: 'reset' | 'state') => {
-    const r = await send({ op });
+  const control = async (op: 'reset' | 'state', args?: unknown[]) => {
+    const r = await send({ op, ...(args && { args }) });
     if ('error' in r) throw new ShimError(`shim ${op} failed: ${r.error}`);
     return r.out;
   };
 
   return {
-    async call(fn, input): Promise<CallResult> {
-      const r = await send({ op: 'call', fn, input });
+    async call(fn, input, observe): Promise<CallResult> {
+      const r = await send({ op: 'call', fn, input, ...(observe && { observe }) });
       if (!('error' in r)) return { ok: true, out: r.out ?? null };
       return { ok: false, kind: r.kind === 'rejected' ? 'rejected' : 'crash', error: String(r.error) };
     },
-    reset: async () => void (await control('reset')),
+    reset: async (args) => void (await control('reset', args)),
     state: () => control('state'),
     async close() {
       dead ??= 'closed';

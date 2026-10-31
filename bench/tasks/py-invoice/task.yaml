@@ -1,0 +1,50 @@
+title: Invoice total with VAT. Each line is rounded half up to the cent; the total is the sum of the rounded lines (CRM billing drift)
+target: src/billing.py
+spec: |
+  id: billing.invoice
+  target: src/billing.py::invoice_total
+  lang: python
+  inputs:
+    lines: list<record{qty:int[1,20],price:int[1,100000]}>[8]
+    vat_pct: int[0,25]
+  ensures:
+    - name: one_total_per_line
+      expr: "len(out.lines) == len(lines)"
+    - name: line_rounding
+      expr: "all(i in range(len(lines)): out.lines[i] == round(lines[i].qty * lines[i].price * (100 + vat_pct) / 100))"
+    - name: total_is_sum_of_lines
+      expr: "out.total == sum(out.lines)"
+examples:
+  - { input: { lines: [{ qty: 2, price: 1000 }], vat_pct: 17 }, out: { lines: [2340], total: 2340 } }
+  - { input: { lines: [{ qty: 1, price: 1000 }, { qty: 1, price: 2000 }], vat_pct: 0 }, out: { lines: [1000, 2000], total: 3000 } }
+  - { input: { lines: [], vat_pct: 17 }, out: { lines: [], total: 0 } }
+variants:
+  ok:
+    bug: none
+    code: |
+      def invoice_total(lines, vat_pct):
+          """Line totals in cents including VAT, rounded half up; the invoice total is the sum of the rounded lines."""
+          rounded = [(l["qty"] * l["price"] * (100 + vat_pct) + 50) // 100 for l in lines]
+          return {"lines": rounded, "total": sum(rounded)}
+  round_at_end:
+    bug: the total is VAT on the unrounded net sum, so it drifts from the sum of the lines
+    code: |
+      def invoice_total(lines, vat_pct):
+          """Line totals in cents including VAT, rounded half up; the invoice total is the sum of the rounded lines."""
+          rounded = [(l["qty"] * l["price"] * (100 + vat_pct) + 50) // 100 for l in lines]
+          net = sum(l["qty"] * l["price"] for l in lines)
+          return {"lines": rounded, "total": (net * (100 + vat_pct) + 50) // 100}
+  truncate:
+    bug: float VAT multiplier, truncated to the cent instead of rounded
+    code: |
+      def invoice_total(lines, vat_pct):
+          """Line totals in cents including VAT, rounded half up; the invoice total is the sum of the rounded lines."""
+          rounded = [int(l["qty"] * l["price"] * (1 + vat_pct / 100)) for l in lines]
+          return {"lines": rounded, "total": sum(rounded)}
+  bankers:
+    bug: Python round(), which rounds half to even
+    code: |
+      def invoice_total(lines, vat_pct):
+          """Line totals in cents including VAT, rounded half up; the invoice total is the sum of the rounded lines."""
+          rounded = [round(l["qty"] * l["price"] * (100 + vat_pct) / 100) for l in lines]
+          return {"lines": rounded, "total": sum(rounded)}

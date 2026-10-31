@@ -1,0 +1,138 @@
+title: Warehouse stock in two locations with receive, ship and transfer; never negative, nothing created or lost (CRM transfer bug)
+target: src/warehouse.py
+spec: |
+  id: inventory.warehouse
+  target: src/warehouse.py::Warehouse
+  lang: python
+  kind: sequence
+  ops:
+    - name: receive
+      inputs: { loc: 'oneof["a","b"]', n: "int[1,5]" }
+    - name: ship
+      inputs: { loc: 'oneof["a","b"]', n: "int[1,5]" }
+    - name: transfer
+      inputs: { src: 'oneof["a","b"]', dst: 'oneof["a","b"]', n: "int[1,5]" }
+  invariant:
+    - name: never_negative
+      expr: "all(q in values(state.stock): q >= 0)"
+    - name: conserved
+      expr: "sum(values(state.stock)) == state.received - state.shipped"
+examples:
+  - steps:
+      - { op: receive, input: { loc: a, n: 5 } }
+      - { op: transfer, input: { src: a, dst: b, n: 3 } }
+      - { op: ship, input: { loc: b, n: 2 } }
+    state: { stock: { a: 2, b: 1 }, received: 5, shipped: 2 }
+  - steps:
+      - { op: receive, input: { loc: a, n: 2 } }
+      - { op: ship, input: { loc: a, n: 5 }, rejected: true }
+    state: { stock: { a: 2, b: 0 }, received: 2, shipped: 0 }
+  - steps:
+      - { op: receive, input: { loc: b, n: 1 } }
+      - { op: transfer, input: { src: b, dst: a, n: 4 }, rejected: true }
+variants:
+  ok:
+    bug: none
+    code: |
+      class Warehouse:
+          """Stock per location. Shipping or transferring more than a location holds is refused."""
+
+          def __init__(self):
+              self.stock = {"a": 0, "b": 0}
+              self.received = 0
+              self.shipped = 0
+
+          def receive(self, loc, n):
+              self.stock[loc] += n
+              self.received += n
+
+          def ship(self, loc, n):
+              if n > self.stock[loc]:
+                  raise ValueError("not enough stock")
+              self.stock[loc] -= n
+              self.shipped += n
+
+          def transfer(self, src, dst, n):
+              if n > self.stock[src]:
+                  raise ValueError("not enough stock")
+              self.stock[src] -= n
+              self.stock[dst] += n
+  guard_checks_dst:
+    bug: transfer checks the destination's stock instead of the source's
+    code: |
+      class Warehouse:
+          """Stock per location. Shipping or transferring more than a location holds is refused."""
+
+          def __init__(self):
+              self.stock = {"a": 0, "b": 0}
+              self.received = 0
+              self.shipped = 0
+
+          def receive(self, loc, n):
+              self.stock[loc] += n
+              self.received += n
+
+          def ship(self, loc, n):
+              if n > self.stock[loc]:
+                  raise ValueError("not enough stock")
+              self.stock[loc] -= n
+              self.shipped += n
+
+          def transfer(self, src, dst, n):
+              if n > self.stock[dst]:
+                  raise ValueError("not enough stock")
+              self.stock[src] -= n
+              self.stock[dst] += n
+  self_transfer:
+    bug: transfer reads both balances first, so a transfer to the same location creates stock
+    code: |
+      class Warehouse:
+          """Stock per location. Shipping or transferring more than a location holds is refused."""
+
+          def __init__(self):
+              self.stock = {"a": 0, "b": 0}
+              self.received = 0
+              self.shipped = 0
+
+          def receive(self, loc, n):
+              self.stock[loc] += n
+              self.received += n
+
+          def ship(self, loc, n):
+              if n > self.stock[loc]:
+                  raise ValueError("not enough stock")
+              self.stock[loc] -= n
+              self.shipped += n
+
+          def transfer(self, src, dst, n):
+              have, there = self.stock[src], self.stock[dst]
+              if n > have:
+                  raise ValueError("not enough stock")
+              self.stock[src] = have - n
+              self.stock[dst] = there + n
+  ship_off_by_one:
+    bug: ship allows taking one more than is in stock (the CRM -1 bug)
+    code: |
+      class Warehouse:
+          """Stock per location. Shipping or transferring more than a location holds is refused."""
+
+          def __init__(self):
+              self.stock = {"a": 0, "b": 0}
+              self.received = 0
+              self.shipped = 0
+
+          def receive(self, loc, n):
+              self.stock[loc] += n
+              self.received += n
+
+          def ship(self, loc, n):
+              if n > self.stock[loc] + 1:
+                  raise ValueError("not enough stock")
+              self.stock[loc] -= n
+              self.shipped += n
+
+          def transfer(self, src, dst, n):
+              if n > self.stock[src]:
+                  raise ValueError("not enough stock")
+              self.stock[src] -= n
+              self.stock[dst] += n
