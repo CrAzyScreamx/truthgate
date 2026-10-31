@@ -1,6 +1,6 @@
 {
   "name": "truthgate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Verify agent-written code against user-approved specs. Honest verdicts, never more than was established.",
   "repository": {
     "type": "git",
